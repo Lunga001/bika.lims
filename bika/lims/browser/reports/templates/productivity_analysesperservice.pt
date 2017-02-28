@@ -17,7 +17,7 @@
         and report_content['formats'] or [];
         report_parms python:report_content.has_key('parms')
         and report_content['parms'] or [];
-        report_headers python:report_content.has_key('headings')
+        report_headers python:report_content.has_key(' headings')
         and report_content['headings'] or {};
         footlines python:report_content.has_key('footings')
         and report_content['footings'] or [];
