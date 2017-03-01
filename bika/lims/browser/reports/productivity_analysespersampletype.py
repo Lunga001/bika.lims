@@ -138,12 +138,53 @@ class Report(BrowserView):
             import StringIO
             import datetime
 
+            ## Write the report header rows
+            header_output = StringIO.StringIO()
+            writer = csv.writer(header_output)
+            writer.writerow(['Report', 'Analyses per Sample Type'])
+            if 'ClientUID' in self.request.form:
+                writer.writerow(['Client', client_title])
+            writer.writerow([])
+
+            ## Write the parameters used to create the report
+            writer.writerow(['Report parameters:'])
+            writer.writerow([])
+            date_query = formatDateQuery(self.context, 'Requested')
+            if date_query:
+                string_dates = []
+                for i in date_query['query']:
+                    string_dates.append(
+                            datetime.datetime.strptime(
+                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                dates_requested = ' - '.join(string_dates)
+                writer.writerow(['Date Requested', dates_requested])
+            if 'bika_analysis_workflow' in self.request.form:
+                review_state = workflow.getTitleForStateOnType(
+                    self.request.form['bika_analysis_workflow'], 'Analysis')
+                writer.writerow(['Analysis States', review_state])
+            if 'bika_cancellation_workflow' in self.request.form:
+                cancellation_state = workflow.getTitleForStateOnType(
+                    self.request.form['bika_cancellation_workflow'], 'Analysis')
+                writer.writerow(['Analysis Active Status', cancellation_state])
+            if 'bika_worksheetanalysis_workflow' in self.request.form:
+                ws_review_state = \
+                    workflow.getTitleForStateOnType(
+                        self.request.form['bika_worksheetanalysis_workflow'],
+                        'Analysis')
+                writer.writerow(['Analysis Worksheet assigned status',
+                                 ws_review_state])
+            writer.writerow([])
+
+            ## Write any totals or report statistics
+            writer.writerow(['Total number of analyses:', len(datalines)])
+            writer.writerow([])
+
             fieldnames = [
                 'Sample Type',
                 'Analyses',
             ]
-            output = StringIO.StringIO()
-            dw = csv.DictWriter(output, extrasaction='ignore',
+            body_output = StringIO.StringIO()
+            dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines:
@@ -151,8 +192,10 @@ class Report(BrowserView):
                     'Sample Type': row[0]['value'],
                     'Analyses': row[1]['value'],
                 })
-            report_data = output.getvalue()
-            output.close()
+            report_data = header_output.getvalue() + \
+                          body_output.getvalue()
+            header_output.close()
+            body_output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
             setheader = self.request.RESPONSE.setHeader
             setheader('Content-Type', 'text/csv')
