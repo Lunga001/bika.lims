@@ -39,9 +39,11 @@ class Report(BrowserView):
 
         this_client = logged_in_client(self.context)
 
+        client_title = None
         if not this_client and 'ClientUID' in self.request.form:
             client_uid = self.request.form['ClientUID']
             this_client = rc.lookupObject(client_uid)
+            client_title = this_client.Title()
             parms.append(
                 {'title': _('Client'),
                  'value': this_client.Title(),
@@ -159,14 +161,64 @@ class Report(BrowserView):
             import StringIO
             import datetime
 
-            fieldnames = [
-                'Client',
-                'Analysis Requests',
-                'Analyses',
-            ]
-            output = StringIO.StringIO()
-            dw = csv.DictWriter(output, extrasaction='ignore',
+            ## Write the report header rows
+            header_output = StringIO.StringIO()
+            writer = csv.writer(header_output)
+            writer.writerow(['Report',
+                'Analysis requests and analyses per client'])
+
+            if 'ClientUID' in self.request.form:
+                writer.writerow(['Client', client_title])
+            writer.writerow([])
+
+            ## Write the parameters used to create the report
+            writer.writerow(['Report parameters:'])
+            writer.writerow([])
+            date_query = formatDateQuery(self.context, 'Requested')
+            if date_query:
+                string_dates = []
+                for i in date_query['query']:
+                    string_dates.append(
+                            datetime.datetime.strptime(
+                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                dates_requested = ' - '.join(string_dates)
+                writer.writerow(['Date Requested', dates_requested])
+            date_query = formatDateQuery(self.context, 'Published')
+            if date_query:
+                string_dates = []
+                for i in date_query['query']:
+                    string_dates.append(
+                            datetime.datetime.strptime(
+                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                dates_published = ' - '.join(string_dates)
+                writer.writerow(['Date Published', dates_published])
+            if 'bika_analysis_workflow' in self.request.form:
+                review_state = workflow.getTitleForStateOnType(
+                    self.request.form['bika_analysis_workflow'], 'Analysis')
+                writer.writerow(['Analysis States', review_state])
+            if 'bika_cancellation_workflow' in self.request.form:
+                cancellation_state = workflow.getTitleForStateOnType(
+                    self.request.form['bika_cancellation_workflow'], 'Analysis')
+                writer.writerow(['Analysis Active Status', cancellation_state])
+            if 'bika_worksheetanalysis_workflow' in self.request.form:
+                ws_review_state = \
+                    workflow.getTitleForStateOnType(
+                        self.request.form['bika_worksheetanalysis_workflow'],
+                        'Analysis')
+                writer.writerow(['Analysis Worksheet assigned status',
+                                 ws_review_state])
+            writer.writerow([])
+
+            ## Write any totals or report statistics
+            writer.writerow(['Total number of analyses:', len(datalines)])
+            writer.writerow([])
+
+            ## Write individual rows to a DictWriter on body_output
+            fieldnames = ['Client', 'Analysis Requests', 'Analyses',]
+            body_output = StringIO.StringIO()
+            dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
+
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines:
                 dw.writerow({
@@ -174,8 +226,10 @@ class Report(BrowserView):
                     'Analysis Requests': row[1]['value'],
                     'Analyses': row[2]['value'],
                 })
-            report_data = output.getvalue()
-            output.close()
+            report_data = header_output.getvalue() + \
+                          body_output.getvalue()
+            header_output.close()
+            body_output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
             setheader = self.request.RESPONSE.setHeader
             setheader('Content-Type', 'text/csv')
