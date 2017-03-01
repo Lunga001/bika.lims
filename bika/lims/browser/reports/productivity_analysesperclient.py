@@ -183,15 +183,6 @@ class Report(BrowserView):
                                 i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
                 dates_requested = ' - '.join(string_dates)
                 writer.writerow(['Date Requested', dates_requested])
-            date_query = formatDateQuery(self.context, 'Published')
-            if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_published = ' - '.join(string_dates)
-                writer.writerow(['Date Published', dates_published])
             if 'bika_analysis_workflow' in self.request.form:
                 review_state = workflow.getTitleForStateOnType(
                     self.request.form['bika_analysis_workflow'], 'Analysis')
