@@ -293,6 +293,40 @@ class Report(BrowserView):
             import StringIO
             import datetime
 
+            ## Write the report header rows
+            header_output = StringIO.StringIO()
+            writer = csv.writer(header_output)
+            writer.writerow(['Report', 'Analyses per Service'])
+            if 'ClientUID' in self.request.form:
+                writer.writerow(['Client', client_title])
+            writer.writerow([])
+
+            ## Write the parameters used to create the report
+            writer.writerow(['Report parameters:'])
+            writer.writerow([])
+            date_query = formatDateQuery(self.context, 'Received')
+            if date_query:
+                string_dates = []
+                for i in date_query['query']:
+                    string_dates.append(
+                            datetime.datetime.strptime(
+                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                dates_requested = ' - '.join(string_dates)
+                writer.writerow(['Date Received', dates_requested])
+            if 'bika_worksheetanalysis_workflow' in self.request.form:
+                ws_review_state = \
+                    workflow.getTitleForStateOnType(
+                        self.request.form['bika_worksheetanalysis_workflow'],
+                        'Analysis')
+                writer.writerow(['Analysis Worksheet assigned status',
+                                 ws_review_state])
+            writer.writerow([])
+
+            ## Write any totals or report statistics
+            writer.writerow(['Total number of analyses:', len(datalines)])
+            writer.writerow([])
+
+            ## Write individual rows to a DictWriter on body_output
             fieldnames = [
                 'Analysis',
                 'Count',
@@ -302,8 +336,8 @@ class Report(BrowserView):
                 'Early',
                 'Average early',
             ]
-            output = StringIO.StringIO()
-            dw = csv.DictWriter(output, extrasaction='ignore',
+            body_output = StringIO.StringIO()
+            dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines:
@@ -319,8 +353,10 @@ class Report(BrowserView):
                     'Early': row[5]['value'],
                     'Average early': row[6]['value'],
                 })
-            report_data = output.getvalue()
-            output.close()
+            report_data = header_output.getvalue() + \
+                          body_output.getvalue()
+            header_output.close()
+            body_output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
             setheader = self.request.RESPONSE.setHeader
             setheader('Content-Type', 'text/csv')
