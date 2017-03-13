@@ -8,6 +8,7 @@ from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
 from bika.lims.browser import BrowserView
 from bika.lims.browser.reports.selection_macros import SelectionMacrosView
+from bika.lims.utils import formatDateQuery
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
@@ -176,36 +177,23 @@ class Report(BrowserView):
             ## Write the report header rows
             header_output = StringIO.StringIO()
             writer = csv.writer(header_output)
-            writer.writerow(['Report', 'Analyses per Service'])
-            if 'ClientUID' in self.request.form:
-                writer.writerow(['Client', client_title])
-            writer.writerow([])
+            writer.writerow(['Report', 'Analyses Summary Per Department '])
 
             ## Write the parameters used to create the report
             writer.writerow(['Report parameters:'])
             writer.writerow([])
-            date_query = formatDateQuery(self.context, 'Requested')
-            if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_requested = ' - '.join(string_dates)
-                writer.writerow(['Date Requested', dates_requested])
-            date_query = formatDateQuery(self.context, 'Published')
-            if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_published = ' - '.join(string_dates)
-                writer.writerow(['Date Published', dates_published])
-            if 'bika_analysis_workflow' in self.request.form:
-                review_state = workflow.getTitleForStateOnType(
-                    self.request.form['bika_analysis_workflow'], 'Analysis')
-                writer.writerow(['Analysis States', review_state])
+            from_date = self.request.form['getDateRequested_fromdate']
+            to_date = self.request.form['getDateRequested_todate']
+            dates_requested = '%s - %s' % (from_date, to_date)
+            writer.writerow(['Date Requested', dates_requested])
+            if 'getAnalysisState' in self.request.form:
+                review_state = self.selection_macros.parse_state(self.request,
+                                                        'bika_analysis_workflow',
+                                                        'getAnalysisState',
+                                                        _('Analysis State'))
+                writer.writerow(['Analysis States', review_state['titles']])
+            if 'GroupingPeriod' in self.request.form:
+                writer.writerow(['Group By', groupby])
             writer.writerow([])
 
             ## Write any totals or report statistics
