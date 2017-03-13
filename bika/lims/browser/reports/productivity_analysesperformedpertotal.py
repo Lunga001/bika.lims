@@ -163,6 +163,28 @@ class Report(BrowserView):
             import StringIO
             import datetime
 
+            ## Write the report header rows
+            header_output = StringIO.StringIO()
+            writer = csv.writer(header_output)
+            writer.writerow(['Report',
+                             'Analyses performed and published as % of total'])
+
+            ## Write the parameters used to create the report
+            writer.writerow(['Report parameters:'])
+            writer.writerow([])
+            from_date = self.request.form['getDateRequested_fromdate']
+            to_date = self.request.form['getDateRequested_todate']
+            dates_requested = '%s - %s' % (from_date, to_date)
+            writer.writerow(['Date Requested', dates_requested])
+            if 'GroupingPeriod' in self.request.form:
+                writer.writerow(['Group By', groupby])
+            writer.writerow([])
+
+            ## Write any totals or report statistics
+            writer.writerow(['Total number of analyses:', len(datalines)])
+            writer.writerow([])
+
+
             fieldnames = [
                 'Group',
                 'Analysis',
@@ -170,8 +192,8 @@ class Report(BrowserView):
                 'Performed',
                 'Published',
             ]
-            output = StringIO.StringIO()
-            dw = csv.DictWriter(output, extrasaction='ignore',
+            body_output = StringIO.StringIO()
+            dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for group_name, group in datalines.items():
@@ -183,8 +205,10 @@ class Report(BrowserView):
                         'Performed': service['Performed'],
                         'Published': service['Published'],
                     })
-            report_data = output.getvalue()
-            output.close()
+            report_data = header_output.getvalue() + \
+                          body_output.getvalue()
+            header_output.close()
+            body_output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
             setheader = self.request.RESPONSE.setHeader
             setheader('Content-Type', 'text/csv')
