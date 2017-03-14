@@ -143,7 +143,12 @@ class Report(BrowserView):
             dw = csv.DictWriter(output, fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines:
-                dw.writerow(row)
+                dw.writerow({'Request': row[0]['value'],
+                             'File': row[1]['value'],
+                             'Attachment type': row[2]['value'],
+                             'Content type': row[3]['value'],
+                             'Size': row[4]['value'],
+                             'Loaded': row[5]['value']})
             report_data = output.getvalue()
             output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
