@@ -113,20 +113,46 @@ class Report(BrowserView):
             import StringIO
             import datetime
 
+            ## Write the report header rows
+            header_output = StringIO.StringIO()
+            writer = csv.writer(header_output)
+            writer.writerow(['Report','Samples Received vs. Samples Reported'])
+
+            ## Write the parameters used to create the report
+            writer.writerow(['Report parameters:'])
+            writer.writerow([])
+
+            from_date = ''
+            to_date = ''
+            if 'getDateReceived_fromdate' in self.request.form:
+                from_date = self.request.form['getDateReceived_fromdate']
+            if 'getDateReceived_todate' in self.request.form:
+                to_date = self.request.form['getDateReceived_todate']
+
+            dates_requested = '%s - %s' % (from_date, to_date)
+            writer.writerow(['Date Received', dates_requested])
+            writer.writerow([])
+
+            ## Write any totals or report statistics
+            writer.writerow(['Total number of analyses:', len(datalines)])
+            writer.writerow([])
+
             fieldnames = [
                 'MonthYear',
                 'ReceivedCount',
                 'PublishedCount',
                 'RatioPercentage',
             ]
-            output = StringIO.StringIO()
-            dw = csv.DictWriter(output, extrasaction='ignore',
+            body_output = StringIO.StringIO()
+            dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines.values():
                 dw.writerow(row)
-            report_data = output.getvalue()
-            output.close()
+            report_data = header_output.getvalue() + \
+                          body_output.getvalue()
+            header_output.close()
+            body_output.close()
             date = datetime.datetime.now().strftime("%Y%m%d%H%M")
             setheader = self.request.RESPONSE.setHeader
             setheader('Content-Type', 'text/csv')
