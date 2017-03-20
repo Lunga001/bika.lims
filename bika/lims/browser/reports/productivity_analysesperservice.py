@@ -106,22 +106,38 @@ class Report(BrowserView):
                          'class': 'category_heading',
                          'colspan': 2}, ]
             datalines.append(dataline)
-            for service in sc(portal_type="AnalysisService",
+
+            brains =  sc(portal_type="AnalysisService",
                               getCategoryUID=cat.UID,
-                              sort_on='sortable_title'):
+                              sort_on='sortable_title')
+
+            sub_total = 0
+            count = 0
+            for service in brains:
                 query['getServiceUID'] = service.UID
                 analyses = bc(query)
                 count_analyses = len(analyses)
+                sub_total += count_analyses
 
                 dataline = []
                 dataitem = {'value': service.Title}
                 dataline.append(dataitem)
-                dataitem = {'value': count_analyses}
 
+                dataitem = {'value': count_analyses}
+                dataline.append(dataitem)
+
+                dataitem = {'value': cat.Title}
+                dataline.append(dataitem)
+
+                dataitem = {'value': sub_total}
                 dataline.append(dataitem)
 
                 datalines.append(dataline)
 
+                count += 1
+                if len(brains) == count:
+                    for i in datalines[-count:]:
+                        i[-1]['value'] = sub_total
                 count_all += count_analyses
 
         # footer data
@@ -201,7 +217,10 @@ class Report(BrowserView):
             writer.writerow([])
 
             ## Write individual rows to a DictWriter on body_output
-            fieldnames = ['Analysis Service', 'Analyses']
+            fieldnames = ['Analysis Service',
+                          'Analyses',
+                          'Category',
+                          'Category Subtotal']
             body_output = StringIO.StringIO()
             dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
@@ -213,6 +232,8 @@ class Report(BrowserView):
                 dw.writerow({
                     'Analysis Service': row[0]['value'],
                     'Analyses': row[1]['value'],
+                    'Category': row[2]['value'],
+                    'Category Subtotal': row[3]['value'],
                 })
             report_data = header_output.getvalue() + \
                           body_output.getvalue()
