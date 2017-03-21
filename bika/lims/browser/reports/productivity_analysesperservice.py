@@ -3,15 +3,33 @@
 # Copyright 2011-2016 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
+import datetime
 from Products.CMFCore.utils import getToolByName
 from bika.lims.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
+from bika.lims.content.client import IClient
 from bika.lims.utils import t
 from bika.lims.utils import formatDateQuery, formatDateParms, logged_in_client
+from plone import api
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
+
+def removeTimeInFormatDateQuery(date_query):
+    string_dates = []
+    if isinstance(date_query, list):
+        for i in date_query:
+            string_dates.append(
+                    datetime.datetime.strptime(
+                        i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+
+    elif isinstance(date_query, str):
+        string_dates.append(
+                datetime.datetime.strptime(
+                    date_query,
+                    '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+    return string_dates
 
 class Report(BrowserView):
     implements(IViewView)
@@ -27,9 +45,8 @@ class Report(BrowserView):
     def __call__(self):
         # get all the data into datalines
 
-        sc = getToolByName(self.context, 'bika_setup_catalog')
-        bc = getToolByName(self.context, 'bika_analysis_catalog')
-        rc = getToolByName(self.context, 'reference_catalog')
+        sc = api.portal.get_tool('bika_setup_catalog')
+        bc = api.portal.get_tool('bika_analysis_catalog')
         self.report_content = {}
         parms = []
         headings = {}
@@ -42,13 +59,15 @@ class Report(BrowserView):
         if 'ClientUID' in self.request.form:
             client_uid = self.request.form['ClientUID']
             query['getClientUID'] = client_uid
-            client = rc.lookupObject(client_uid)
-            client_title = client.Title()
+            client = api.content.find(object_provides=IClient,UID=client_uid)
+            client = client[0] if client else False
+            client_title = client.Title
         else:
             client = logged_in_client(self.context)
             if client:
                 client_title = client.Title()
                 query['getClientUID'] = client.UID()
+
         if client_title:
             parms.append(
                 {'title': _('Client'), 'value': client_title, 'type': 'text'})
@@ -164,7 +183,6 @@ class Report(BrowserView):
         if self.request.get('output_format', '') == 'CSV':
             import csv
             import StringIO
-            import datetime
 
             ## Write the report header rows
             header_output = StringIO.StringIO()
@@ -179,20 +197,12 @@ class Report(BrowserView):
             writer.writerow([])
             date_query = formatDateQuery(self.context, 'Requested')
             if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                string_dates = removeTimeInFormatDateQuery(date_query['query'])
                 dates_requested = ' - '.join(string_dates)
                 writer.writerow(['Date Requested', dates_requested])
             date_query = formatDateQuery(self.context, 'Published')
             if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
+                string_dates = removeTimeInFormatDateQuery(date_query['query'])
                 dates_published = ' - '.join(string_dates)
                 writer.writerow(['Date Published', dates_published])
             if 'bika_analysis_workflow' in self.request.form:
