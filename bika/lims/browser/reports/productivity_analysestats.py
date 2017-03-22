@@ -162,13 +162,18 @@ class Report(BrowserView):
             cat_count_undefined = 0
             cat_mins_early = 0
             cat_mins_late = 0
-            for service in sc(portal_type="AnalysisService",
+            sub_total = 0
+            cnt_brains = 0
+            cnt_service = 0
+            brains = sc(portal_type="AnalysisService",
                               getCategoryUID=cat.UID,
-                              sort_on='sortable_title'):
+                              sort_on='sortable_title')
+            for service in brains:
 
                 dataline = [{'value': service.Title,
                              'class': 'testgreen'}, ]
                 if service.UID not in services:
+                    cnt_brains += 1
                     continue
 
                 if first_time:
@@ -199,8 +204,21 @@ class Report(BrowserView):
                                  'class': 'number'})
                 dataline.append({'value': services[service.UID]['ave_early'],
                                  'class': 'number'})
+                # Category and Subtotal of Category
+                sub_total += count
+                dataline.append({'value': cat.Title,
+                                 'class': 'subtotal_label'})
+                dataline.append({'value': sub_total, 'class': 'number'})
 
                 datalines.append(dataline)
+
+                cnt_brains += 1
+                cnt_service += 1
+                # Please note that subtotal is the last item on dataline,
+                # when adding other columns before or after
+                if len(brains) == cnt_brains:
+                    for i in datalines[-cnt_service:]:
+                        i[-1]['value'] = sub_total
 
             # category totals
             dataline = [{'value': '%s - total' % (cat.Title),
@@ -335,6 +353,8 @@ class Report(BrowserView):
                 'Average late',
                 'Early',
                 'Average early',
+                'Category',
+                'Subtotal Category',
             ]
             body_output = StringIO.StringIO()
             dw = csv.DictWriter(body_output, extrasaction='ignore',
@@ -352,6 +372,8 @@ class Report(BrowserView):
                     'Average late': row[4]['value'],
                     'Early': row[5]['value'],
                     'Average early': row[6]['value'],
+                    'Category': row[7]['value'],
+                    'Subtotal Category': row[8]['value'],
                 })
             report_data = header_output.getvalue() + \
                           body_output.getvalue()
