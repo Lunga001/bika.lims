@@ -7,9 +7,11 @@ from Products.CMFCore.utils import getToolByName
 from bika.lims.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
+from bika.lims.content.client import IClient
 from bika.lims.utils import t
 from bika.lims.utils import formatDateQuery, formatDateParms, formatDuration, \
-    logged_in_client
+    formatPortalCatalogDateQuery, logged_in_client
+from plone import api
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
@@ -25,8 +27,8 @@ class Report(BrowserView):
     def __call__(self):
         # get all the data into datalines
 
-        sc = getToolByName(self.context, 'bika_setup_catalog')
-        bc = getToolByName(self.context, 'bika_analysis_catalog')
+        sc = api.portal.get_tool('bika_setup_catalog')
+        bc = api.portal.get_tool('bika_analysis_catalog')
         rc = getToolByName(self.context, 'reference_catalog')
         self.report_content = {}
         parms = []
@@ -39,13 +41,15 @@ class Report(BrowserView):
         if 'ClientUID' in self.request.form:
             client_uid = self.request.form['ClientUID']
             query['getClientUID'] = client_uid
-            client = rc.lookupObject(client_uid)
-            client_title = client.Title()
+            client = api.content.find(object_provides=IClient,UID=client_uid)
+            client = client[0] if client else False
+            client_title = client.Title
         else:
             client = logged_in_client(self.context)
             if client:
                 client_title = client.Title()
                 query['getClientUID'] = client.UID()
+
         if client_title:
             parms.append(
                 {'title': _('Client'),
@@ -132,7 +136,7 @@ class Report(BrowserView):
                                                                    avemins)
 
         # and now lets do the actual report lines
-        formats = {'columns': 7,
+        formats = {'columns': 9,
                    'col_heads': [_('Analysis'),
                                  _('Count'),
                                  _('Undefined'),
@@ -140,6 +144,8 @@ class Report(BrowserView):
                                  _('Average late'),
                                  _('Early'),
                                  _('Average early'),
+                                 _('Category'),
+                                 _('Subtotal Category'),
                    ],
                    'class': '',
         }
@@ -155,7 +161,7 @@ class Report(BrowserView):
                       sort_on='sortable_title'):
             catline = [{'value': cat.Title,
                         'class': 'category_heading',
-                        'colspan': 7}, ]
+                        'colspan': 9}, ]
             first_time = True
             cat_count_early = 0
             cat_count_late = 0
@@ -296,6 +302,11 @@ class Report(BrowserView):
         else:
             footline.append({'value': '',
                              'class': 'total number'})
+        # Category and Sub Category
+        footline.append({'value': '',
+                         'class': 'total number'})
+        footline.append({'value': '',
+                         'class': 'total number'})
 
         footlines.append(footline)
 
@@ -324,13 +335,9 @@ class Report(BrowserView):
             writer.writerow([])
             date_query = formatDateQuery(self.context, 'Received')
             if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_requested = ' - '.join(string_dates)
-                writer.writerow(['Date Received', dates_requested])
+                dates_rec = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Received', dates_rec[0], dates_rec[1]])
             if 'bika_worksheetanalysis_workflow' in self.request.form:
                 ws_review_state = \
                     workflow.getTitleForStateOnType(
