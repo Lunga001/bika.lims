@@ -3,33 +3,18 @@
 # Copyright 2011-2016 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
-import datetime
 from Products.CMFCore.utils import getToolByName
 from bika.lims.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
 from bika.lims.content.client import IClient
 from bika.lims.utils import t
-from bika.lims.utils import formatDateQuery, formatDateParms, logged_in_client
+from bika.lims.utils import formatDateQuery, formatDateParms, \
+        formatPortalCatalogDateQuery, logged_in_client
 from plone import api
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
-
-def removeTimeInFormatDateQuery(date_query):
-    string_dates = []
-    if isinstance(date_query, list):
-        for i in date_query:
-            string_dates.append(
-                    datetime.datetime.strptime(
-                        i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-
-    elif isinstance(date_query, str):
-        string_dates.append(
-                datetime.datetime.strptime(
-                    date_query,
-                    '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-    return string_dates
 
 class Report(BrowserView):
     implements(IViewView)
@@ -112,8 +97,11 @@ class Report(BrowserView):
                  'type': 'text'})
 
         # and now lets do the actual report lines
-        formats = {'columns': 2,
-                   'col_heads': [_('Analysis service'), _('Number of analyses')],
+        formats = {'columns': 4,
+                   'col_heads': [_('Analysis service'),
+                                 _('Number of analyses'),
+                                 _('Category'),
+                                 _('Category Subtotal'),],
                    'class': '',
         }
 
@@ -123,7 +111,7 @@ class Report(BrowserView):
                       sort_on='sortable_title'):
             dataline = [{'value': cat.Title,
                          'class': 'category_heading',
-                         'colspan': 2}, ]
+                         'colspan': 4}, ]
             datalines.append(dataline)
 
             brains =  sc(portal_type="AnalysisService",
@@ -182,6 +170,7 @@ class Report(BrowserView):
 
         if self.request.get('output_format', '') == 'CSV':
             import csv
+            import datetime
             import StringIO
 
             ## Write the report header rows
@@ -197,14 +186,14 @@ class Report(BrowserView):
             writer.writerow([])
             date_query = formatDateQuery(self.context, 'Requested')
             if date_query:
-                string_dates = removeTimeInFormatDateQuery(date_query['query'])
-                dates_requested = ' - '.join(string_dates)
-                writer.writerow(['Date Requested', dates_requested])
+                dates_rec = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Requested', dates_rec[0], dates_rec[1]])
             date_query = formatDateQuery(self.context, 'Published')
             if date_query:
-                string_dates = removeTimeInFormatDateQuery(date_query['query'])
-                dates_published = ' - '.join(string_dates)
-                writer.writerow(['Date Published', dates_published])
+                dates_pub = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Published', dates_pub[0], dates_pub[1]])
             if 'bika_analysis_workflow' in self.request.form:
                 review_state = workflow.getTitleForStateOnType(
                     self.request.form['bika_analysis_workflow'], 'Analysis')

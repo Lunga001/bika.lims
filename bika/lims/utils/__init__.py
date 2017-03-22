@@ -138,6 +138,17 @@ def formatDateQuery(context, date_id):
 
     return date_query
 
+def formatPortalCatalogDateQuery(value):
+    """ Format results of formatDateQuery for displaying
+        purpose on the CSV
+    """
+    str_lst = []
+    if isinstance(value, list):
+        return value
+    elif isinstance(value, str):
+        str_lst.append(value)
+        str_lst.append('')
+    return str_lst
 
 def formatDateParms(context, date_id):
     """ Obtain and reformat the from and to dates
