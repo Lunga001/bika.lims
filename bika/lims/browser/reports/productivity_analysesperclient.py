@@ -8,7 +8,8 @@ from bika.lims.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
 from bika.lims.utils import t
-from bika.lims.utils import formatDateQuery, formatDateParms, logged_in_client
+from bika.lims.utils import formatDateQuery, formatDateParms, \
+        logged_in_client, formatPortalCatalogDateQuery
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
@@ -176,13 +177,9 @@ class Report(BrowserView):
             writer.writerow([])
             date_query = formatDateQuery(self.context, 'Requested')
             if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_requested = ' - '.join(string_dates)
-                writer.writerow(['Date Requested', dates_requested])
+                dates_rec = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Requested', dates_rec[0], dates_rec[1]])
             if 'bika_analysis_workflow' in self.request.form:
                 review_state = workflow.getTitleForStateOnType(
                     self.request.form['bika_analysis_workflow'], 'Analysis')
