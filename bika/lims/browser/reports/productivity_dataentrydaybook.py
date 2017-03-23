@@ -8,6 +8,7 @@ from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
 from bika.lims.browser import BrowserView
 from bika.lims.browser.reports.selection_macros import SelectionMacrosView
+from bika.lims.utils import formatDateQuery, formatPortalCatalogDateQuery
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
@@ -143,7 +144,11 @@ class Report(BrowserView):
                 to_date = self.request.form['getDateCreated_todate']
 
             dates_requested = '%s - %s' % (from_date, to_date)
-            writer.writerow(['Date Created', dates_requested])
+            date_query = formatDateQuery(self.context, 'getDateCreated')
+            if date_query:
+                dates_rec = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Created', dates_rec[0], dates_rec[1]])
             writer.writerow([])
 
             ## Write any totals or report statistics
