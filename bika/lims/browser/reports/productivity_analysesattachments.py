@@ -8,7 +8,8 @@ from bika.lims.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import bikaMessageFactory as _
 from bika.lims.utils import t
-from bika.lims.utils import formatDateQuery, formatDateParms, logged_in_client
+from bika.lims.utils import formatDateQuery, formatDateParms, \
+        formatPortalCatalogDateQuery, logged_in_client
 from plone.app.layout.globals.interfaces import IViewView
 from zope.interface import implements
 
@@ -152,13 +153,9 @@ class Report(BrowserView):
             writer.writerow([])
             date_query = formatDateQuery(self.context, 'Loaded')
             if date_query:
-                string_dates = []
-                for i in date_query['query']:
-                    string_dates.append(
-                            datetime.datetime.strptime(
-                                i, '%Y-%m-%d %H:%M').strftime('%Y-%m-%d'))
-                dates_requested = ' - '.join(string_dates)
-                writer.writerow(['Date Loaded', dates_requested])
+                dates_rec = formatPortalCatalogDateQuery(date_query['query'])
+                writer.writerow(
+                        ['Dates Loaded', dates_rec[0], dates_rec[1]])
             writer.writerow([])
 
             ## Write any totals or report statistics
