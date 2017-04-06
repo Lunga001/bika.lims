@@ -108,16 +108,16 @@ class Report(BrowserView):
         count_all = 0
         for cat in sc(portal_type="AnalysisCategory",
                       sort_on='sortable_title'):
+            sub_total = 0
             dataline = [{'value': cat.Title,
-                         'class': 'category_heading',
-                         'colspan': 2}, ]
+                         'class': 'category_heading',}]
+                         #'colspan': 2},]
             datalines.append(dataline)
 
             brains =  sc(portal_type="AnalysisService",
                               getCategoryUID=cat.UID,
                               sort_on='sortable_title')
 
-            sub_total = 0
             for service in brains:
                 query['getServiceUID'] = service.UID
                 analyses = bc(query)
@@ -134,10 +134,13 @@ class Report(BrowserView):
                 datalines.append(dataline)
 
                 count_all += count_analyses
-            dataline = [{'value': 'Subtotal',
-                         'class': 'total_label'
-                         },
-                         {'value': sub_total}]
+
+            count = len(brains) + 1
+            if len(datalines[-count]) == 1: 
+                datalines[-count].append({'value': sub_total,
+                                          'class': 'category_heading',})
+            # Empty lines
+            dataline = [{'value': '' }, {'value': ''}]
             datalines.append(dataline)
 
         # footer data

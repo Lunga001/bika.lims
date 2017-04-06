@@ -60,6 +60,7 @@ h3 {
     font-size: 100%;
 	border-collapse:collapse;
     margin-bottom: 15px;
+    font-weight: bold;
 }
 
 .bika-report-parms td,
