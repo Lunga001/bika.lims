@@ -111,7 +111,6 @@ class Report(BrowserView):
             sub_total = 0
             dataline = [{'value': cat.Title,
                          'class': 'category_heading',}]
-                         #'colspan': 2},]
             datalines.append(dataline)
 
             brains =  sc(portal_type="AnalysisService",

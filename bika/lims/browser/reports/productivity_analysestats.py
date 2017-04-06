@@ -136,7 +136,7 @@ class Report(BrowserView):
                                                                    avemins)
 
         # and now lets do the actual report lines
-        formats = {'columns': 9,
+        formats = {'columns': 7,
                    'col_heads': [_('Analysis'),
                                  _('Count'),
                                  _('Undefined'),
@@ -144,8 +144,6 @@ class Report(BrowserView):
                                  _('Average late'),
                                  _('Early'),
                                  _('Average early'),
-                                 _('Category'),
-                                 _('Subtotal Category'),
                    ],
                    'class': '',
         }
@@ -160,8 +158,7 @@ class Report(BrowserView):
         for cat in sc(portal_type='AnalysisCategory',
                       sort_on='sortable_title'):
             catline = [{'value': cat.Title,
-                        'class': 'category_heading',
-                        'colspan': 9}, ]
+                        'class': 'category_heading'},]
             first_time = True
             cat_count_early = 0
             cat_count_late = 0
@@ -169,8 +166,7 @@ class Report(BrowserView):
             cat_mins_early = 0
             cat_mins_late = 0
             sub_total = 0
-            cnt_brains = 0
-            cnt_service = 0
+            cnt = 0
             brains = sc(portal_type="AnalysisService",
                               getCategoryUID=cat.UID,
                               sort_on='sortable_title')
@@ -179,13 +175,13 @@ class Report(BrowserView):
                 dataline = [{'value': service.Title,
                              'class': 'testgreen'}, ]
                 if service.UID not in services:
-                    cnt_brains += 1
                     continue
 
                 if first_time:
                     datalines.append(catline)
                     first_time = False
 
+                cnt += 1
                 # analyses found
                 cat_count_early += services[service.UID]['count_early']
                 cat_count_late += services[service.UID]['count_late']
@@ -197,6 +193,7 @@ class Report(BrowserView):
                         services[service.UID]['count_late'] + \
                         services[service.UID]['count_undefined']
 
+                sub_total += count
                 dataline.append({'value': count,
                                  'class': 'number'})
                 dataline.append(
@@ -210,21 +207,19 @@ class Report(BrowserView):
                                  'class': 'number'})
                 dataline.append({'value': services[service.UID]['ave_early'],
                                  'class': 'number'})
-                # Category and Subtotal of Category
-                sub_total += count
-                dataline.append({'value': cat.Title,
-                                 'class': 'subtotal_label'})
-                dataline.append({'value': sub_total, 'class': 'number'})
 
                 datalines.append(dataline)
 
-                cnt_brains += 1
-                cnt_service += 1
-                # Please note that subtotal is the last item on dataline,
-                # when adding other columns before or after
-                if len(brains) == cnt_brains:
-                    for i in datalines[-cnt_service:]:
-                        i[-1]['value'] = sub_total
+
+            if cnt != 0:
+                cnt += 1
+                if len(datalines[-cnt]) == 1: 
+                    datalines[-cnt].append({'value': sub_total,
+                                            'class': 'category_heading',
+                                            'colspan': 6})
+                    # Empty lines
+                    dataline = [{'value': '' }, {'value': ''}]
+                    datalines.append(dataline)
 
             # category totals
             dataline = [{'value': '%s - total' % (cat.Title),
@@ -360,16 +355,23 @@ class Report(BrowserView):
                 'Average late',
                 'Early',
                 'Average early',
-                'Category',
-                'Subtotal Category',
             ]
             body_output = StringIO.StringIO()
             dw = csv.DictWriter(body_output, extrasaction='ignore',
                                 fieldnames=fieldnames)
             dw.writerow(dict((fn, fn) for fn in fieldnames))
             for row in datalines:
-                if len(row) == 1:
+                if len(row) == 2:
                     # category heading thingy
+                    dw.writerow({
+                        'Analysis': row[0]['value'],
+                        'Count': row[1]['value'],
+                        'Undefined': '',
+                        'Late': '',
+                        'Average late': '',
+                        'Early': '',
+                        'Average early': '',
+                    })
                     continue
                 dw.writerow({
                     'Analysis': row[0]['value'],
@@ -379,8 +381,6 @@ class Report(BrowserView):
                     'Average late': row[4]['value'],
                     'Early': row[5]['value'],
                     'Average early': row[6]['value'],
-                    'Category': row[7]['value'],
-                    'Subtotal Category': row[8]['value'],
                 })
             report_data = header_output.getvalue() + \
                           body_output.getvalue()
