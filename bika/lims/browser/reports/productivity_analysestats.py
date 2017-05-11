@@ -285,7 +285,8 @@ class Report(BrowserView):
             footline.append({'value': formatDuration(self.context, ave_mins),
                              'class': 'total number'})
         else:
-            footline.append({'value': ''})
+            footline.append({'value': '',
+                             'class': 'total number'})
 
         footline.append({'value': total_count_early,
                          'class': 'total number'})
@@ -297,11 +298,6 @@ class Report(BrowserView):
         else:
             footline.append({'value': '',
                              'class': 'total number'})
-        # Category and Sub Category
-        footline.append({'value': '',
-                         'class': 'total number'})
-        footline.append({'value': '',
-                         'class': 'total number'})
 
         footlines.append(footline)
 
