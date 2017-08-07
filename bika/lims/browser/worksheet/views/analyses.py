@@ -47,7 +47,7 @@ class AnalysesView(BaseView):
             'ResultDM': {'title': _('Dry')},
             'retested': {'title': "<img src='++resource++bika.lims.images/retested.png' title='%s'/>" % _('Retested'),
                          'type':'boolean'},
-            'Attachments': {'title': _('Attachments')},
+            #'Attachments': {'title': _('Attachments')},
             'Instrument': {'title': _('Instrument')},
             'state_title': {'title': _('State')},
             'Priority': { 'title': _('Priority'), 'index': 'Priority'},
@@ -70,7 +70,8 @@ class AnalysesView(BaseView):
                         'Uncertainty',
                         'DueDate',
                         'state_title',
-                        'Attachments']
+                        #'Attachments'
+                        ]
              },
         ]
 
@@ -153,7 +154,7 @@ class AnalysesView(BaseView):
                     'rowspan': {'Pos':1},
                     'Pos': pos,
                     'Service': '',
-                    'Attachments': '',
+                    #'Attachments': '',
                     'state_title': 's',})
                 item['replace'] = {
                     'Pos': "<table width='100%' cellpadding='0' cellspacing='0'>" + \
