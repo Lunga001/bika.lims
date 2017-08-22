@@ -1,25 +1,34 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
-from Products.CMFPlone.utils import _createObjectByType, safe_unicode
-from bika.lims import bikaMessageFactory as _
-from bika.lims.utils import t
-from bika.lims.controlpanel.bika_setupitems import BikaSetupItemsView
-from bika.lims.config import PROJECTNAME
-from bika.lims.idserver import renameAfterCreation
-from bika.lims.interfaces import IAnalysisServices
-from bika.lims.utils import tmpID
-from bika.lims.validators import ServiceKeywordValidator
+from transaction import savepoint
+
+from zope.interface.declarations import implements
+
+from plone.app.layout.globals.interfaces import IViewView
 from plone.app.folder.folder import ATFolder, ATFolderSchema
+from plone.app.content.browser.interfaces import IFolderContentsView
+
+from Products.CMFCore.utils import getToolByName
+from Products.CMFPlone.utils import _createObjectByType
+from Products.CMFPlone.utils import safe_unicode
 from Products.Archetypes import atapi
 from Products.ATContentTypes.content import schemata
-from Products.CMFCore.utils import getToolByName
 from Products.Five.browser import BrowserView
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
-from transaction import savepoint
-from zope.interface.declarations import implements
+
+from bika.lims.utils import t
+from bika.lims.utils import tmpID
+from bika.lims.config import PROJECTNAME
+from bika.lims import bikaMessageFactory as _
+from bika.lims.idserver import renameAfterCreation
+from bika.lims.interfaces import IAnalysisServices
+from bika.lims.browser.bika_listing import BikaListingView
+from bika.lims.validators import ServiceKeywordValidator
 
 
 class AnalysisServiceCopy(BrowserView):
@@ -68,9 +77,12 @@ class AnalysisServiceCopy(BrowserView):
                 if field.getType() == "Products.Archetypes.Field.ComputedField" \
                         or fieldname in self.skip_fieldnames:
                     continue
-                getter = field.getAccessor(src_service)
+                value = field.getAccessor(src_service)()
+                # https://github.com/bikalabs/bika.lims/issues/2015
+                if fieldname in ["UpperDetectionLimit", "LowerDetectionLimit"]:
+                    value = str(value)
                 setter = dst_service.Schema()[fieldname].getMutator(dst_service)
-                setter(getter())
+                setter(value)
             dst_service.reindexObject()
             return dst_title
         else:
@@ -122,14 +134,30 @@ class AnalysisServiceCopy(BrowserView):
             self.request.response.redirect(self.context.absolute_url())
 
 
-class AnalysisServicesView(BikaSetupItemsView):
+class AnalysisServicesView(BikaListingView):
+    """Listing table view for Analysis Services
+    """
+    implements(IFolderContentsView, IViewView)
 
     def __init__(self, context, request):
-        super(AnalysisServicesView, self).__init__(
-            context, request, 'AnalysisService', 'analysisservice_big.png')
+        super(AnalysisServicesView, self).__init__(context, request)
+        self.catalog = 'bika_setup_catalog'
+        self.contentFilter = {'portal_type': 'AnalysisService',
+                              'sort_on': 'sortable_title'}
+        self.context_actions = {
+            _('Add'):
+                {'url': 'createObject?type_name=AnalysisService',
+                 'icon': '++resource++bika.lims.images/add.png'}}
+        self.icon = self.portal_url + \
+            "/++resource++bika.lims.images/analysisservice_big.png"
         self.title = self.context.translate(_("Analysis Services"))
         self.show_sort_column = False
+        self.show_select_row = False
+        self.show_select_column = True
         self.show_select_all_checkbox = False
+        self.pagesize = 25
+        self.sort_on = "sortable_title"
+
         self.categories = []
         self.do_cats = self.context.bika_setup.getCategoriseAnalysisServices()
         if self.do_cats:
@@ -182,20 +210,20 @@ class AnalysisServicesView(BikaSetupItemsView):
             'DuplicateVariation': {
                 'title': _('Dup Var'),
                 'toggle': False
-             },
+            },
             'Calculation': {
                 'title': _('Calculation')
             },
-            'CommercialID': {
-                'title': _('Commercial ID'),
-                'attr': 'getCommercialID',
-                'toggle': True
-            },
-            'ProtocolID': {
-                'title': _('Protocol ID'),
-                'attr': 'getProtocolID',
-                'toggle': True
-            },
+            # 'CommercialID': {
+            #     'title': _('Commercial ID'),
+            #     'attr': 'getCommercialID',
+            #     'toggle': True
+            # },
+            # 'ProtocolID': {
+            #     'title': _('Protocol ID'),
+            #     'attr': 'getProtocolID',
+            #     'toggle': True
+            # },
             'SortKey': {
                 'title': _('Sort Key'),
                 'index': 'sortKey',
@@ -205,85 +233,124 @@ class AnalysisServicesView(BikaSetupItemsView):
         }
 
         self.review_states = [
-            {'id': 'default',
-             'title': _('Active'),
-             'contentFilter': {'inactive_state': 'active'},
-             'transitions': [{'id': 'deactivate'}, ],
-             'columns': ['Title',
-                         'Category',
-                         'Keyword',
-                         'Method',
-                         'Department',
-                         'CommercialID',
-                         'ProtocolID',
-                         'Instrument',
-                         'Unit',
-                         'Price',
-                         'MaxTimeAllowed',
-                         'DuplicateVariation',
-                         'Calculation',
-                         'SortKey',
-                         ],
-             'custom_actions': [{'id': 'duplicate',
-                                 'title': _('Duplicate'),
-                                 'url': 'copy'}, ]
-             },
-            {'id': 'inactive',
-             'title': _('Dormant'),
-             'contentFilter': {'inactive_state': 'inactive'},
-             'transitions': [{'id': 'activate'}, ],
-             'columns': ['Title',
-                         'Category',
-                         'Keyword',
-                         'Method',
-                         'Department',
-                         'CommercialID',
-                         'ProtocolID',
-                         'Instrument',
-                         'Unit',
-                         'Price',
-                         'MaxTimeAllowed',
-                         'DuplicateVariation',
-                         'Calculation',
-                         ],
-             'custom_actions': [{'id': 'duplicate',
-                                 'title': _('Duplicate'),
-                                 'url': 'copy'}, ]
-             },
-            {'id': 'all',
-             'title': _('All'),
-             'contentFilter': {},
-             'columns': ['Title',
-                         'Keyword',
-                         'Category',
-                         'Method',
-                         'Department',
-                         'CommercialID',
-                         'ProtocolID',
-                         'Instrument',
-                         'Unit',
-                         'Price',
-                         'MaxTimeAllowed',
-                         'DuplicateVariation',
-                         'Calculation',
-                         ],
-             'custom_actions': [{'id': 'duplicate',
-                                 'title': _('Duplicate'),
-                                 'url': 'copy'}, ]
-             },
+            {
+                'id': 'default',
+                'title': _('Active'),
+                'contentFilter': {'inactive_state': 'active'},
+                'transitions': [{'id': 'deactivate'}, ],
+                'columns': [
+                    'Title',
+                    'Category',
+                    'Keyword',
+                    'Method',
+                    'Department',
+                    # 'CommercialID',
+                    # 'ProtocolID',
+                    'Instrument',
+                    'Unit',
+                    'Price',
+                    'MaxTimeAllowed',
+                    'DuplicateVariation',
+                    'Calculation',
+                    'SortKey',
+                ],
+                'custom_actions': [
+                    {
+                        'id': 'duplicate',
+                        'title': _('Duplicate'),
+                        'url': 'copy'
+                    },
+                ]
+            }, {
+                'id': 'inactive',
+                'title': _('Dormant'),
+                'contentFilter': {'inactive_state': 'inactive'},
+                'transitions': [{'id': 'activate'}, ],
+                'columns': [
+                    'Title',
+                    'Category',
+                    'Keyword',
+                    'Method',
+                    'Department',
+                    # 'CommercialID',
+                    # 'ProtocolID',
+                    'Instrument',
+                    'Unit',
+                    'Price',
+                    'MaxTimeAllowed',
+                    'DuplicateVariation',
+                    'Calculation',
+                ],
+                'custom_actions': [
+                    {
+                        'id': 'duplicate',
+                        'title': _('Duplicate'),
+                        'url': 'copy'
+                    },
+                ]
+            }, {
+                'id': 'all',
+                'title': _('All'),
+                'contentFilter': {},
+                'columns': [
+                    'Title',
+                    'Keyword',
+                    'Category',
+                    'Method',
+                    'Department',
+                    # 'CommercialID',
+                    # 'ProtocolID',
+                    'Instrument',
+                    'Unit',
+                    'Price',
+                    'MaxTimeAllowed',
+                    'DuplicateVariation',
+                    'Calculation',
+                ],
+                'custom_actions': [
+                    {'id': 'duplicate',
+                     'title': _('Duplicate'),
+                     'url': 'copy'},
+                ]
+            },
         ]
 
         if not self.context.bika_setup.getShowPrices():
             for i in range(len(self.review_states)):
                 self.review_states[i]['columns'].remove('Price')
 
-        bsc = getToolByName(self.context, 'bika_setup_catalog')
-        self.an_cats = bsc(portal_type="AnalysisCategory",
-                           sort_on="sortable_title")
-        self.an_cats_order = dict([(b.Title, "{:04}".format(a))
-                                  for a, b in enumerate(self.an_cats)])
+    def isItemAllowed(self, obj):
+        """
+        It checks if the item can be added to the list depending on the
+        department filter. If the analysis service is not assigned to a
+        department, show it.
+        If department filtering is disabled in bika_setup, will return True.
+        """
+        if not self.context.bika_setup.getAllowDepartmentFiltering():
+            return True
+        # Gettin the department from analysis service
+        obj_dep = obj.getDepartment()
+        result = True
+        if obj_dep:
+            # Getting the cookie value
+            cookie_dep_uid = self.request.get('filter_by_department_info', 'no')
+            # Comparing departments' UIDs
+            result = True if obj_dep.UID() in\
+                cookie_dep_uid.split(',') else False
+            return result
+        return result
 
     def folderitem(self, obj, item, index):
+        if 'obj' in item:
+            obj = item['obj']
+            # Although these should be automatically inserted when bika_listing
+            # searches the schema for fields that match columns, it is still
+            # not harmful to be explicit:
+            item['Keyword'] = obj.getKeyword()
+            # item['CommercialID'] = obj.getCommercialID()
+            # item['ProtocolID'] = obj.getProtocolID()
+            item['SortKey'] = obj.getSortKey()
+
         cat = obj.getCategoryTitle()
         cat_order = self.an_cats_order.get(cat)
         if self.do_cats:
@@ -342,6 +409,12 @@ class AnalysisServicesView(BikaSetupItemsView):
         return item
 
     def folderitems(self):
+        bsc = getToolByName(self.context, 'bika_setup_catalog')
+        self.an_cats = bsc(portal_type="AnalysisCategory",
+                           sort_on="sortable_title")
+        self.an_cats_order = dict([(b.Title, "{:04}".format(a))
+                                  for a, b in enumerate(self.an_cats)])
+
         items = super(AnalysisServicesView, self).folderitems()
         if self.do_cats:
             self.categories = map(lambda x: x[0],
@@ -352,10 +425,13 @@ class AnalysisServicesView(BikaSetupItemsView):
 
 
 schema = ATFolderSchema.copy()
+schemata.finalizeATCTSchema(schema, folderish=True, moveDiscussion=False)
+
+
 class AnalysisServices(ATFolder):
     implements(IAnalysisServices)
     displayContentsTab = False
     schema = schema
 
-schemata.finalizeATCTSchema(schema, folderish=True, moveDiscussion=False)
+
 atapi.registerType(AnalysisServices, PROJECTNAME)

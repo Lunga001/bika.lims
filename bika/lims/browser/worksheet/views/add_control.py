@@ -1,8 +1,8 @@
-# coding=utf-8
-
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from AccessControl import getSecurityManager
@@ -57,6 +57,7 @@ class AddControlView(BrowserView):
             self.request.response.redirect(self.context.absolute_url() + "/manage_results")
         else:
             self.Services = ServicesView(self.context, self.request)
+            self.Services.expand_all_categories = False
             self.Services.view_url = self.Services.base_url + "/add_control"
             return self.template()
 

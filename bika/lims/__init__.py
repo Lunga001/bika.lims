@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 import warnings
@@ -69,6 +71,7 @@ def initialize(context):
     from content.calculation import Calculation
     from content.client import Client
     from content.clientfolder import ClientFolder
+    from content.clienttype import ClientType
     from content.contact import Contact
     from content.container import Container
     from content.containertype import ContainerType
@@ -82,6 +85,7 @@ def initialize(context):
     from content.instrumentscheduledtask import InstrumentScheduledTask
     from content.instrumentvalidation import InstrumentValidation
     from content.instrumenttype import InstrumentType
+    from content.instrumentlocation import InstrumentLocation
     from content.invoice import Invoice
     from content.invoicebatch import InvoiceBatch
     from content.invoicefolder import InvoiceFolder
@@ -132,12 +136,15 @@ def initialize(context):
     from controlpanel.bika_attachmenttypes import AttachmentTypes
     from controlpanel.bika_batchlabels import BatchLabels
     from controlpanel.bika_calculations import Calculations
+    from controlpanel.bika_clientdepartments import ClientDepartments
+    from controlpanel.bika_clienttypes import ClientTypes
     from controlpanel.bika_containers import Containers
     from controlpanel.bika_containertypes import ContainerTypes
     from controlpanel.bika_departments import Departments
     from controlpanel.bika_identifiertypes import IdentifierTypes
     from controlpanel.bika_instruments import Instruments
     from controlpanel.bika_instrumenttypes import InstrumentTypes
+    from controlpanel.bika_instrumentlocations import InstrumentLocations
     from controlpanel.bika_labcontacts import LabContacts
     from controlpanel.bika_labproducts import LabProducts
     from controlpanel.bika_manufacturers import Manufacturers

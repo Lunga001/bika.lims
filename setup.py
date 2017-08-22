@@ -1,16 +1,16 @@
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 import os
 from setuptools import setup, find_packages
 
-version = '3.2.1'
+version = '3.3.0'
 
 
 def read(*rnames):
-    return open(os.path.join(os.path.dirname(__file__), *rnames)).read()
+    return open(os.path.join(os.path.dirname(__file__), *rnames)).read() + "\n"
 
 setup(name='bika.lims',
       version=version,
@@ -22,7 +22,8 @@ setup(name='bika.lims',
                        "Authors and maintainers\n" + \
                        "-----------------------\n" + \
                        "- Bika Lab Systems, http://bikalabs.com\n" + \
-                       "- Naralabs, http://naralabs.com",
+                       "- Naralabs, http://naralabs.com\n" + \
+                       "- RIDING BYTES, http://ridingbytes.com",
       # Get more strings from
       # http://pypi.python.org/pypi?:action=list_classifiers
       classifiers=[
@@ -37,8 +38,8 @@ setup(name='bika.lims',
       keywords=['lims', 'bika', 'opensource'],
       author='Bika Laboratory Systems',
       author_email='support@bikalabs.com',
-      maintainer='Naralabs',
-      maintainer_email='info@naralabs.com',
+      maintainer='RIDING BYTES',
+      maintainer_email='hello@ridingbytes.com',
       url='http://www.bikalims.org',
       license='AGPL',
       packages=find_packages(exclude=['ez_setup']),
@@ -46,44 +47,44 @@ setup(name='bika.lims',
       include_package_data=True,
       zip_safe=False,
       install_requires=[
-          'setuptools',
+          'CairoSVG==1.0.20',
+          'collective.js.jqueryui',
+          'collective.monkeypatcher',
+          'collective.progressbar',
+          'five.pt',
+          'gpw',
+          'jarn.jsi18n==0.3',
+          'magnitude',
+          'openpyxl',
           'plone.api',
+          'plone.app.dexterity',
+          'plone.app.iterate',
+          'plone.app.referenceablebehavior',
+          'plone.app.relationfield',
+          'plone.app.z3cform',
           'plone.jsonapi.core',
+          'plone.resource',
+          'Products.AdvancedQuery',
           'Products.ATExtensions>=1.1a3',
           'Products.CMFEditions',
           'Products.DataGridField',
-          'Products.AdvancedQuery',
           'Products.TinyMCE',
-          'collective.monkeypatcher',
-          'collective.js.jqueryui',
-          'plone.app.z3cform',
-          'openpyxl==1.5.8',
-          'plone.app.iterate',
-          'magnitude',
-          'gpw',
-          'jarn.jsi18n==0.3',
-          'collective.wtf',
+          'setuptools',
           'WeasyPrint==0.19.2',
-          'collective.progressbar',
-          'z3c.unconfigure==1.0.1',
-          'plone.app.dexterity',
-          'plone.app.relationfield',
-          'plone.app.referenceablebehavior',
-          'five.pt',
           'z3c.jbot',
-          'plone.resource',
-          'CairoSVG==1.0.20',
+          'z3c.unconfigure==1.0.1',
       ],
       extras_require={
           'test': [
-              'plone.app.testing',
-              'robotsuite',
-              'robotframework-selenium2library',
+              'Products.SecureMailHost',
               'plone.app.robotframework',
+              'plone.app.testing',
+              'plone.app.textfield',
+              'plone.resource',
               'Products.PloneTestCase',
               'robotframework-debuglibrary',
-              'plone.resource',
-              'plone.app.textfield',
+              'robotframework-selenium2library',
+              'robotsuite',
           ]
       },
       entry_points="""

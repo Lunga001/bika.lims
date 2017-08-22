@@ -1,8 +1,8 @@
-# coding=utf-8
-
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from Products.CMFCore.utils import getToolByName
@@ -526,42 +526,36 @@ class AnalysisResultsImporter(Logger):
                                 pass
 
         # Calculate analysis dependencies
-        for aruid in arprocessed:
-            ar = self.bc(portal_type='AnalysisRequest',
-                         UID=aruid)
+        for aruid in list(set(arprocessed)):
+            ar = self.bc(portal_type='AnalysisRequest', UID=aruid)
             ar = ar[0].getObject()
             analyses = ar.getAnalyses()
             for analysis in analyses:
                 analysis = analysis.getObject()
-                if analysis.calculateResult(True, True):
+                initial_result = analysis.getResult()
+                calc_passed = analysis.calculateResult(override=True,
+                                                       cascade=True)
+                if calc_passed and initial_result != analysis.getResult():
                     self.log(
-                        "${request_id} calculated result for '${analysis_keyword}': '${analysis_result}'",
+                        "${request_id}: calculated result for "
+                        "'${analysis_keyword}': '${analysis_result}'",
                         mapping={"request_id": ar.getRequestID(),
                                  "analysis_keyword": analysis.getKeyword(),
                                  "analysis_result": str(analysis.getResult())}
                     )
 
-        # Not sure if there's any reason why ReferenceAnalyses have not
-        # defined the method calculateResult...
-        # Needs investigation.
-        #for instuid in instprocessed:
-        #    inst = self.bsc(portal_type='Instrument',UID=instuid)[0].getObject()
-        #    analyses = inst.getAnalyses()
-        #    for analysis in analyses:
-        #        if (analysis.calculateResult(True, True)):
-        #            self.log(_("%s calculated result for '%s': '%s'") %
-        #                 (inst.title, analysis.getKeyword(), str(analysis.getResult())))
-
         for arid, acodes in importedars.iteritems():
-            acodesmsg = ["Analysis %s" % acod for acod in acodes]
-            self.log("${request_id}: ${analysis_keywords} imported sucessfully",
+            acodesmsg = '. '.join(["Analysis %s" % acod for acod in acodes])
+            self.log("${request_id}: ${analysis_keywords} imported successfully",
                      mapping={"request_id": arid,
                               "analysis_keywords": acodesmsg})
 
         for instid, acodes in importedinsts.iteritems():
-            acodesmsg = ["Analysis %s" % acod for acod in acodes]
-            msg = "%s: %s %s" % (instid, ", ".join(acodesmsg), "imported sucessfully")
-            self.log(msg)
+            acodesmsg = '. '.join(["Analysis %s" % acod for acod in acodes])
+            self.log(
+                "${instrument_id}: ${analysis_keywords} imported successfully",
+                 mapping={"instrument_id": instid,
+                          "analysis_keywords": acodesmsg})
 
         if self.instrument_uid:
             self.log(

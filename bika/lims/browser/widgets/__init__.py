@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from .datetimewidget import DateTimeWidget
@@ -24,3 +26,4 @@ from .integer import IntegerWidget
 from .decimal import DecimalWidget
 from .rejectionsetupwidget import RejectionSetupWidget
 from .rejectionwidget import RejectionWidget
+from .comboboxwidget import ComboBoxWidget

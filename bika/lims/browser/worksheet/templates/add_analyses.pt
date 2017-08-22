@@ -55,6 +55,13 @@
 							tal:content="python:profile[1]"/>
 					</tal:profile>
 				</select>&nbsp;
+				<label for="client" i18n:translate="">Client</label>
+				<select id="WSTClientSelector" name="client" class="listing-filter">
+					<option value="any" i18n:translate="">Any</option>
+					<tal:options repeat="client view/getClients">
+						<option tal:attributes="value python:client" tal:content="python:client"/>
+					</tal:options>
+				</select>&nbsp;
 				<input type="submit"
 					   class="applytemplate"
 				       value="Apply template"
@@ -68,7 +75,7 @@
 				i18n:translate="">Category</label>
 			<select id="CategorySelector"
 					tal:attributes="name string:${form_id}_getCategoryTitle"
-					class="listing-filter">
+					class="listing-filter auto-search-on-change">
 				<option value="any" i18n:translate="">Any</option>
 				<tal:options repeat="category view/getCategories">
 					<option
@@ -83,7 +90,7 @@
 				i18n:translate="">Service</label>
 			<select id="ServiceSelector"
 					tal:attributes="name string:${form_id}_Title"
-					class="listing-filter">
+					class="listing-filter auto-search-on-change">
 				<option value="any" i18n:translate="">Any</option>
 				<tal:options repeat="service view/getServices">
 					<option
@@ -98,7 +105,7 @@
 				i18n:translate="">Client</label>
 			<select id="ClientSelector"
 					tal:attributes="name string:${form_id}_getClientTitle"
-					class="listing-filter">
+					class="listing-filter auto-search-on-change">
 				<option value="any" i18n:translate="">Any</option>
 				<tal:options repeat="client view/getClients">
 					<option

@@ -29,7 +29,9 @@ window.bika.lims.controllers =  {
     // Atachments
     ".attachments":
         ['AttachmentsUtils'],
-
+    // Bika Listing Filter Bar
+    "tr.bika_listing_filter_bar":
+        ['BikaListingFilterBarController'],
 
     /** JS objects to be loaded always **/
 
@@ -64,6 +66,9 @@ window.bika.lims.controllers =  {
     ".portaltype-instrumentcertification.template-base_edit":
         ['InstrumentCertificationEditView'],
 
+    // Editing a calculation
+    ".portaltype-calculation":
+        ['CalculationEditView'],
 
     // Bika Setup
     ".portaltype-bikasetup.template-base_edit":
@@ -121,13 +126,8 @@ window.bika.lims.controllers =  {
 	// Common and utilities for AR Add forms
 	".portaltype-analysisrequest.template-ar_add": ['AnalysisRequestAddView'],
 
-	// the file "bika.lims.analysisrequest.add_by_row.js itself is included
-	// from ar_add_by_row.pt
-	".analysisrequest_add_by_row": ['AnalysisRequestAddByRow'],
-
-	// the file "bika.lims.analysisrequest.add_by_col.js itself is included
-	// from ar_add_by_row.pt
-	".analysisrequest_add_by_col": ['AnalysisRequestAddByCol'],
+  // AR Add 2
+	"#analysisrequest_add_form": ['AnalysisRequestAdd'],
 
     "#ar_publish_container":
         ['AnalysisRequestPublishView', 'RangeGraph'],
@@ -172,10 +172,9 @@ window.bika.lims.controllers =  {
     "#worksheet-printview-wrapper":
         ['WorksheetPrintView'],
 
-
     // Reports folder (not AR Reports)
     ".portaltype-reportfolder":
-        ['ReportFolderView'],
+        ['ReportFolderView']
 
     // Add here your view-controller/s assignment
 

@@ -1,19 +1,25 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
+import re
+import string
+
 from Acquisition import aq_parent
+
 from Products.CMFPlone.utils import safe_unicode
-from bika.lims import bikaMessageFactory as _
-from bika.lims.utils import to_utf8
 from Products.CMFCore.utils import getToolByName
 from Products.validation import validation
 from Products.validation.interfaces.IValidator import IValidator
+
 from zope.interface import implements
-from datetime import datetime
-import string
-import re
+
+from bika.lims import api
+from bika.lims.utils import to_utf8
+from bika.lims import bikaMessageFactory as _
 
 
 class IdentifierTypeAttributesValidator:
@@ -26,13 +32,11 @@ class IdentifierTypeAttributesValidator:
 
     def __call__(self, value, *args, **kwargs):
         instance = kwargs['instance']
-        bsc = getToolByName(instance, "bika_setup_catalog")
-        translate = getToolByName(instance, 'translation_service').translate
         request = instance.REQUEST
         form = request.get('form', {})
         fieldname = kwargs['field'].getName()
         form_value = form.get(fieldname, False)
-        if form_value == False:
+        if form_value is False:
             # not required...
             return True
         if value == instance.get(fieldname):
@@ -55,13 +59,11 @@ class IdentifierValidator:
 
     def __call__(self, value, *args, **kwargs):
         instance = kwargs['instance']
-        bsc = getToolByName(instance, "bika_setup_catalog")
-        translate = getToolByName(instance, 'translation_service').translate
         request = instance.REQUEST
         form = request.get('form', {})
         fieldname = kwargs['field'].getName()
         form_value = form.get(fieldname, False)
-        if form_value == False:
+        if form_value is False:
             # not required...
             return True
         if value == instance.get(fieldname):
@@ -82,21 +84,54 @@ class UniqueFieldValidator:
     name = "uniquefieldvalidator"
 
     def __call__(self, value, *args, **kwargs):
+        field = kwargs['field']
+        fieldname = field.getName()
         instance = kwargs['instance']
-        fieldname = kwargs['field'].getName()
-        # request = kwargs.get('REQUEST', {})
-        # form = request.get('form', {})
-
         translate = getToolByName(instance, 'translation_service').translate
 
-        if value == instance.get(fieldname):
+        # return directly if nothing changed
+        if value == field.get(instance):
             return True
 
-        for item in aq_parent(instance).objectValues():
+        # We want to use the catalog to speed things up, as using `objectValues`
+        # is very expensive if the parent object contains many items
+        parent_objects = []
+
+        # 1. Get the right catalog for this object
+        catalogs = api.get_catalogs_for(instance)
+        catalog = catalogs[0]
+
+        # 2. Check if the field accessor is indexed
+        field_index = None
+        accessor = field.getAccessor(instance)
+        if accessor:
+            field_index = accessor.__name__
+
+        # 3. Check if the field index is in the indexes
+        # Field is indexed, use the catalog instead of objectValues
+        parent_path = api.get_parent_path(instance)
+        portal_type = instance.portal_type
+        catalog_query = {"portal_type": portal_type,
+                            "path": {"query": parent_path, "depth": 1}}
+
+        if field_index and field_index in catalog.indexes():
+            # We use the field index to reduce the results list
+            catalog_query[field_index] = value
+            parent_objects = map(api.get_object, catalog(catalog_query))
+        elif fieldname in catalog.indexes():
+            # We use the fieldname as index to reduce the results list
+            catalog_query[fieldname] = value
+            parent_objects = map(api.get_object, catalog(catalog_query))
+        else:
+            # fall back to the objectValues :(
+            parent_object = api.get_parent(instance)
+            parent_objects = parent_object.objectValues()
+
+        for item in parent_objects:
             if hasattr(item, 'UID') and item.UID() != instance.UID() and \
-                            fieldname in item.Schema() and \
-                            str(item.Schema()[fieldname].get(item)) == str(
-                        value):  # We have to compare them as strings because
+               fieldname in item.Schema() and \
+               str(item.Schema()[fieldname].get(item)) == str(value):
+                # We have to compare them as strings because
                 # even if a number (as an  id) is saved inside
                 # a string widget and string field, it will be
                 # returned as an int. I don't know if it is
@@ -113,7 +148,8 @@ validation.register(UniqueFieldValidator())
 
 
 class InvoiceBatch_EndDate_Validator:
-    """ Verifies that the End Date is after the Start Date """
+    """Verifies that the End Date is after the Start Date
+    """
 
     implements(IValidator)
     name = "invoicebatch_EndDate_validator"
@@ -149,9 +185,6 @@ class ServiceKeywordValidator:
 
     def __call__(self, value, *args, **kwargs):
         instance = kwargs['instance']
-        # fieldname = kwargs['field'].getName()
-        # request = kwargs.get('REQUEST', {})
-        # form = request.get('form', {})
 
         translate = getToolByName(instance, 'translation_service').translate
 
@@ -172,7 +205,7 @@ class ServiceKeywordValidator:
                 return to_utf8(translate(msg))
 
         calc = hasattr(instance, 'getCalculation') and \
-               instance.getCalculation() or None
+            instance.getCalculation() or None
         our_calc_uid = calc and calc.UID() or ''
 
         # check the value against all Calculation Interim Field ids
@@ -292,8 +325,8 @@ class InterimFieldsValidator:
             if field['keyword'] != value:
                 continue
             if 'title' in field and \
-                            field['title'] in title_keywords.keys() and \
-                            title_keywords[field['title']] != field['keyword']:
+               field['title'] in title_keywords.keys() and \
+               title_keywords[field['title']] != field['keyword']:
                 msg = _("Validation failed: column title '${title}' "
                         "must have keyword '${keyword}'",
                         mapping={'title': safe_unicode(field['title']),
@@ -302,8 +335,8 @@ class InterimFieldsValidator:
                 instance.REQUEST[key] = to_utf8(translate(msg))
                 return instance.REQUEST[key]
             if 'keyword' in field and \
-                            field['keyword'] in keyword_titles.keys() and \
-                            keyword_titles[field['keyword']] != field['title']:
+               field['keyword'] in keyword_titles.keys() and \
+               keyword_titles[field['keyword']] != field['title']:
                 msg = _("Validation failed: keyword '${keyword}' "
                         "must have column title '${title}'",
                         mapping={'keyword': safe_unicode(field['keyword']),
@@ -337,14 +370,14 @@ class FormulaValidator:
         translate = getToolByName(instance, 'translation_service').translate
         bsc = getToolByName(instance, 'bika_setup_catalog')
         interim_keywords = interim_fields and \
-                           [f['keyword'] for f in interim_fields] or []
+            [f['keyword'] for f in interim_fields] or []
         keywords = re.compile(r"\[([^\.^\]]+)\]").findall(value)
 
         for keyword in keywords:
             # Check if the service keyword exists and is active.
             dep_service = bsc(getKeyword=keyword, inactive_state="active")
             if not dep_service and \
-                    not keyword in interim_keywords:
+               keyword not in interim_keywords:
                 msg = _("Validation failed: Keyword '${keyword}' is invalid",
                         mapping={'keyword': safe_unicode(keyword)})
                 return to_utf8(translate(msg))
@@ -376,7 +409,7 @@ validation.register(FormulaValidator())
 
 
 class CoordinateValidator:
-    """ Validate latitude or longitude field values
+    """Validate latitude or longitude field values
     """
     implements(IValidator)
     name = "coordinatevalidator"
@@ -395,19 +428,19 @@ class CoordinateValidator:
         translate = getToolByName(instance, 'translation_service').translate
 
         try:
-            degrees = int(form_value['degrees'])
+            degrees = int(form_value.get('degrees', 0))
         except ValueError:
             return to_utf8(
                 translate(_("Validation failed: degrees must be numeric")))
 
         try:
-            minutes = int(form_value['minutes'])
+            minutes = int(form_value.get('minutes', 0))
         except ValueError:
             return to_utf8(
                 translate(_("Validation failed: minutes must be numeric")))
 
         try:
-            seconds = int(form_value['seconds'])
+            seconds = int(form_value.get('seconds', 0))
         except ValueError:
             return to_utf8(
                 translate(_("Validation failed: seconds must be numeric")))
@@ -420,7 +453,7 @@ class CoordinateValidator:
             return to_utf8(
                 translate(_("Validation failed: seconds must be 0 - 59")))
 
-        bearing = form_value['bearing']
+        bearing = form_value.get('bearing', '')
 
         if fieldname == 'Latitude':
             if not 0 <= degrees <= 90:
@@ -813,7 +846,6 @@ class ReferenceValuesValidator:
         instance = kwargs['instance']
         # fieldname = kwargs['field'].getName()
         request = kwargs.get('REQUEST', {})
-        fieldname = kwargs['field'].getName()
 
         translate = getToolByName(instance, 'translation_service').translate
 
@@ -998,8 +1030,8 @@ class IBANvalidator:
         if len(IBAN) != length_c:
             diff = len(IBAN) - length_c
             msg = _('Wrong IBAN length by %s: %s' % (
-            ('short by %i' % -diff) if diff < 0 else
-            ('too long by %i' % diff), value))
+                ('short by %i' % -diff) if diff < 0 else
+                ('too long by %i' % diff), value))
             return to_utf8(translate(msg))
         # Validating procedure
         elif int("".join(str(letter_dic[x]) for x in IBAN)) % 97 != 1:
@@ -1100,3 +1132,27 @@ class SortKeyValidator:
 
 
 validation.register(SortKeyValidator())
+
+
+class ImportValidator:
+    """Checks if a dotted name can be imported or not
+    """
+    implements(IValidator)
+    name = "importvalidator"
+
+    def __call__(self, module, **kwargs):
+
+        # some needed tools
+        instance = kwargs['instance']
+        translate = getToolByName(instance, 'translation_service').translate
+
+        try:
+            import importlib
+            importlib.import_module(module)
+        except ImportError:
+            msg = _("Validation failed: Could not import module '%s'" % module)
+            return to_utf8(translate(msg))
+
+        return True
+
+validation.register(ImportValidator())

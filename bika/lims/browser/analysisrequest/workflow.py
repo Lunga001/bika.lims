@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from bika.lims import bikaMessageFactory as _
@@ -51,7 +53,7 @@ class AnalysisRequestWorkflowAction(WorkflowAction):
             came_from = came_from[0]
         # Call out to the workflow action method
         # Use default bika_listing.py/WorkflowAction for other transitions
-        method_name = 'workflow_action_' + action
+        method_name = 'workflow_action_' + action if action else ''
         method = getattr(self, method_name, False)
         if method:
             method()
@@ -572,8 +574,7 @@ class AnalysisRequestWorkflowAction(WorkflowAction):
             referer = self.request.get_header("referer")
             self.request.response.redirect(referer)
             return
-        url = self.context.absolute_url() + "/portal_factory/" + \
-            "AnalysisRequest/Request new analyses/ar_add" + \
+        url = self.context.absolute_url() + "/ar_add" + \
             "?ar_count={0}".format(len(objects)) + \
             "&copy_from={0}".format(",".join(objects.keys()))
         self.request.response.redirect(url)

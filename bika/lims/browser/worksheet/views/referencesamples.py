@@ -1,8 +1,8 @@
-# coding=utf-8
-
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from operator import itemgetter
@@ -32,7 +32,7 @@ class ReferenceSamplesView(BaseView):
         self.show_select_all_checkbox = False
         self.show_select_column = False
         self.show_workflow_action_buttons = False
-        self.pagesize = 50
+        self.pagesize = 9999
         # must set service_uids in __call__ before delegating to super
         self.service_uids = []
         # must set control_type='b' or 'c' in __call__ before delegating

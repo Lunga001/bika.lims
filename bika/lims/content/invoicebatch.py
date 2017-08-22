@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 """InvoiceBatch is a container for Invoice instances.
@@ -9,7 +11,7 @@ from AccessControl import ClassSecurityInfo
 from DateTime import DateTime
 from Products.Archetypes.public import *
 from Products.CMFPlone.utils import _createObjectByType
-from bika.lims import bikaMessageFactory as _
+from bika.lims import bikaMessageFactory as _, getToolByName
 from bika.lims.config import ManageInvoices, PROJECTNAME
 from bika.lims.content.bikaschema import BikaSchema
 from bika.lims.content.invoice import InvoiceLineItem
@@ -54,25 +56,18 @@ class InvoiceBatch(BaseFolder):
     def invoices(self):
         return self.objectValues('Invoice')
 
-    # security.declareProtected(PostInvoiceBatch, 'post')
-    # def post(self, REQUEST = None):
-    #     """ Post invoices
-    #     """
-    #     map (lambda e: e._post(), self.invoices())
-    #     if REQUEST:
-    #         REQUEST.RESPONSE.redirect('invoicebatch_invoices')
-
     security.declareProtected(ManageInvoices, 'createInvoice')
 
-    def createInvoice(self, client_uid, items):
+    def createInvoice(self, client_title, items):
         """ Creates and invoice for a client and a set of items
         """
         plone_view = self.restrictedTraverse('@@plone')
         invoice_id = self.generateUniqueId('Invoice')
         invoice = _createObjectByType("Invoice", self, invoice_id)
-        # noinspection PyCallingNonCallable
+        pc = getToolByName(self, "portal_catalog")
+        client = pc(portal_type="Client", getName=client_title)[0].getObject()
         invoice.edit(
-            Client=client_uid,
+            Client=client,
             InvoiceDate=DateTime(),
         )
 
@@ -164,10 +159,11 @@ def ObjectModifiedEventHandler(instance, event):
                 obj = p.getObject()
                 if obj.getInvoiced():
                     continue
-                client_uid = obj.aq_parent.UID()
-                l = clients.get(client_uid, [])
+                client_title = obj.aq_parent.Title()
+                l = clients.get(client_title, [])
                 l.append(obj)
-                clients[client_uid] = l
+                clients[client_title] = l
+
         # Create an invoice for each client
-        for client_uid, items in clients.items():
-            instance.createInvoice(client_uid, items)
+        for client_title, items in sorted(clients.items()):
+            instance.createInvoice(client_title, items)

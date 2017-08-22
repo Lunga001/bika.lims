@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from zope.interface import Interface
@@ -13,6 +15,9 @@ class IBikaLIMS(Interface):
        "bika" theme, this interface must be its layer
     """
 
+class IGenerateID(Interface):
+    """Marker Interface to generate an ID
+    """
 
 class IHaveNoBreadCrumbs(Interface):
 
@@ -271,6 +276,25 @@ class IInstrumentTypes(Interface):
 
     ""
 
+class IInstrumentLocation(Interface):
+    """A physical place, where instruments can be located
+    """
+
+class IInstrumentLocations(Interface):
+    """Physical places, where instruments can be located
+    """
+
+class IInstrumentCalibration(Interface):
+    """Instrument Calibration
+    """
+
+class IInstrumentCertification(Interface):
+    """Instrument Certification
+    """
+
+class IInstrumentValidation(Interface):
+    """Instrument Validation
+    """
 
 class IAnalysisSpecs(Interface):
     ""
@@ -716,3 +740,24 @@ class IAcquireFieldDefaults(Interface):
     def __call__(context, field):
         """This function must return the surrogate (source) value directly.
         """
+
+class IProxyField(Interface):
+    """A field that proxies transparently to the field of another object.
+    Mainly needed for AnalysisRequest fields that are actually stored on the Sample.
+    """
+
+class IARAnalysesField(Interface):
+    """A field that manages AR Analyses
+    """
+
+class INumberGenerator(Interface):
+    """A utility to generates unique numbers by key
+    """
+
+class IClientType(Interface):
+    """ A Client Type.
+    """
+
+class IClientTypes(Interface):
+    """ A Client Types container.
+    """

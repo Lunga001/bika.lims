@@ -1,15 +1,22 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from Acquisition import aq_inner
 from Acquisition import aq_parent
+
+import transaction
 from Products.CMFCore.utils import getToolByName
 from Products.CMFPlone.utils import _createObjectByType
+from Products.ZCatalog.Catalog import CatalogError
 
 from bika.lims import logger
 from Products.CMFCore import permissions
+from Products.CMFPlone.utils import _createObjectByType
+from bika.lims.utils import tmpID
 from bika.lims.permissions import *
 from bika.lims.utils import tmpID
 
@@ -21,7 +28,7 @@ def upgrade(tool):
 
     qi = portal.portal_quickinstaller
     ufrom = qi.upgradeInfo('bika.lims')['installedVersion']
-    logger.info("Upgrading Bika LIMS: %s -> %s" % (ufrom, '3.1.11'))
+    logger.info("Upgrading Bika LIMS: %s -> %s" % (ufrom, '3.2.0'))
 
     """Updated profile steps
     list of the generic setup import step names: portal.portal_setup.getSortedImportSteps() <---
@@ -33,23 +40,83 @@ def upgrade(tool):
     setup.runImportStepFromProfile('profile-bika.lims:default', 'typeinfo')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'jsregistry')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'cssregistry')
-    setup.runImportStepFromProfile('profile-bika.lims:default', 'workflow-csv')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'factorytool')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'controlpanel')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'catalog')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'propertiestool')
     setup.runImportStepFromProfile('profile-bika.lims:default', 'skins')
+    setup.runImportStepFromProfile('profile-bika.lims:default', 'viewlets')
+    setup.runImportStepFromProfile('profile-bika.lims:default', 'workflow')
+    setup.runImportStepFromProfile(
+        'profile-bika.lims:default', 'portlets', run_dependencies=False)
     # Creating all the sampling coordinator roles, permissions and indexes
     create_samplingcoordinator(portal)
+    departments(portal)
+    departments(portal)
+    # Migrate Instrument Locations
+    migrate_instrument_locations(portal)
     """Update workflow permissions
     """
+    # Adding old method of instrument as a set .
+    logger.info("Assigning Multiple method to instruments...")
+    instrument_multiple_methods(portal)
+
+    logger.info("Updating workflow role mappings for all objects in portal...")
     wf = getToolByName(portal, 'portal_workflow')
     wf.updateRoleMappings()
-
     # Updating Verifications of Analysis field from integer to String.
     multi_verification(portal)
 
     return True
+
+
+def migrate_instrument_locations(portal):
+    bsc = portal.bika_setup_catalog
+
+    bika_instrumentlocations = portal.bika_setup.get("bika_instrumentlocations")
+
+    if bika_instrumentlocations is None:
+        logger.error("bika_instrumentlocations not found in bika_setup!")
+        return  # This should not happen
+
+    # move bika_instrumentlocations below bika_instrumenttypes
+    panel_ids = portal.bika_setup.objectIds()
+    target_idx = panel_ids.index("bika_instrumenttypes")
+    current_idx = panel_ids.index("bika_instrumentlocations")
+    delta = current_idx - target_idx
+    if delta > 1:
+        portal.bika_setup.moveObjectsUp("bika_instrumentlocations", delta=delta-1)
+
+    instrument_brains = bsc(portal_type="Instrument")
+    for instrument_brain in instrument_brains:
+        instrument = instrument_brain.getObject()
+
+        # get the string value of the `location` field
+        location = instrument.getLocation()
+        if not location:
+            continue  # Skip if no location was set
+
+        # make a dictionary with the Titles as keys and the objects as values
+        instrument_locations = bika_instrumentlocations.objectValues()
+        instrument_location_titles = map(lambda o: o.Title(), instrument_locations)
+        locations = dict(zip(instrument_location_titles, instrument_locations))
+
+        instrument_location = None
+        if location in locations:
+            logger.info("Instrument Location {} exists in bika_instrumentlocations".format(location))
+            instrument_location = locations[location]
+        else:
+            # Create a new location and link it to the instruments InstrumentLocation field
+            instrument_location = _createObjectByType("InstrumentLocation", bika_instrumentlocations, tmpID())
+            instrument_location.setTitle(location)
+            instrument_location._renameAfterCreation()
+            instrument_location.reindexObject()
+            logger.info("Created Instrument Location {} in bika_instrumentlocations".format(location))
+
+        instrument.setLocation(None)  # flush the old instrument location
+        instrument.setInstrumentLocation(instrument_location)
+        instrument.reindexObject()
+        logger.info("Linked Instrument Location {} to Instrument {}".format(location, instrument.id))
 
 
 def create_samplingcoordinator(portal):
@@ -113,20 +180,22 @@ def create_samplingcoordinator(portal):
     bc = getToolByName(portal, 'bika_catalog', None)
     if 'getScheduledSamplingSampler' not in bc.indexes():
         bc.addIndex('getScheduledSamplingSampler', 'FieldIndex')
+        bc.clearFindAndRebuild()
+
+def departments(portal):
+    """ To add department indexes to the catalogs """
+    bc = getToolByName(portal, 'bika_catalog')
+    if 'getDepartmentUIDs' not in bc.indexes():
+        bc.addIndex('getDepartmentUIDs', 'KeywordIndex')
+        bc.clearFindAndRebuild()
+    bac = getToolByName(portal, 'bika_analysis_catalog')
+    if 'getDepartmentUID' not in bac.indexes():
+        bac.addIndex('getDepartmentUID', 'KeywordIndex')
 
 def create_CAS_IdentifierType(portal):
     """LIMS-1391 The CAS Nr IdentifierType is normally created by
     setuphandlers during site initialisation.
     """
-    pc = getToolByName(portal, 'portal_catalog', None)
-    objs = pc(portal_type="Analyses",review_state="to_be_verified")
-    for obj_brain in objs:
-        obj = obj_brain.getObject()
-        old_field = obj.Schema().get("NumberOfVerifications", None)
-        if old_field:
-            new_value=''
-            for n in range(0,old_field):
-                new_value+='admin'
     bsc = getToolByName(portal, 'bika_catalog', None)
     idtypes = bsc(portal_type = 'IdentifierType', title='CAS Nr')
     if not idtypes:
@@ -137,21 +206,44 @@ def create_CAS_IdentifierType(portal):
                     description='Chemical Abstracts Registry number',
                     portal_types=['Analysis Service'])
 
+
 def multi_verification(portal):
     """
     Getting all analyses with review_state in to_be_verified and
     adding "admin" as a verificator as many times as this analysis verified before.
     """
     pc = getToolByName(portal, 'portal_catalog', None)
-    objs = pc(portal_type="Analyses",review_state="to_be_verified")
+    objs = pc(portal_type="Analyses", review_state="to_be_verified")
     for obj_brain in objs:
         obj = obj_brain.getObject()
-        old_field = obj.Schema().get("NumberOfVerifications", None)
+        old_field = obj.Schema().get("NumberOfVerifications", None).get(obj)
         if old_field:
-            new_value=''
-            for n in range(0,old_field):
-                new_value+='admin'
-                if n<old_field:
-                    new_value+=','
+            new_value = ''
+            for n in range(0, old_field):
+                new_value += 'admin'
+                if n < old_field:
+                    new_value += ','
             obj.setVerificators(new_value)
+    transaction.commit()
+
+
+
+
+def instrument_multiple_methods(portal):
+    # An instrument had only a single relevant field called "Method".
+    # This field has been replaced with a multiValued "Methods" field.
+
+    # First adding new index
+    bsc = getToolByName(portal, 'bika_setup_catalog')
+    try:
+        bsc.addIndex('getMethodUIDs', 'KeywordIndex')
+    except CatalogError:
+        # Index already exists form previous run of upgrade step
+        pass
+
+    for instrument in portal.bika_setup.bika_instruments.objectValues():
+        value = instrument.Schema().get("Method", None).get(instrument)
+        if value and type(value) not in (list, tuple):
+            # Only listify the value if it's not already listified
+            instrument.setMethods([value])
 

@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from bika.lims.browser import BrowserView
@@ -74,12 +76,6 @@ class InvoiceView(BrowserView):
                 'VATAmount': '%0.2f' % item.get('VATAmount', ''),
                 'total': '%0.2f' % item.get('Total', ''),
             }
-            if item.get('AnalysisRequest', ''):
-                    invoice_data['orderNoURL'] = item['AnalysisRequest'].absolute_url()
-            elif item.get('SupplyOrder', ''):
-                    invoice_data['orderNoURL'] = item['SupplyOrder'].absolute_url()
-            else:
-                invoice_data['orderNoURL'] = ''
             self.items.append(invoice_data)
         # Render the template
         return self.template()

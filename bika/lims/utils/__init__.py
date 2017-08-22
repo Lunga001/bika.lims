@@ -1,39 +1,42 @@
 # -*- coding: utf-8 -*-
-from AccessControl import getSecurityManager
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
-
-from AccessControl import ModuleSecurityInfo, allow_module
-
-import math
-
-from bika.lims import logger
-from bika.lims.browser import BrowserView
-from DateTime import DateTime
-from email import Encoders
-from email.MIMEBase import MIMEBase
-from plone.memoize import ram
-from plone.registry.interfaces import IRegistry
-from Products.Archetypes.public import DisplayList
-from Products.CMFCore.utils import getToolByName
-from Products.CMFPlone.utils import safe_unicode
-from socket import timeout
-from time import time
-from weasyprint import HTML, CSS
-from zope.component import queryUtility
-from zope.i18n import translate
-from zope.i18n.locales import locales
-
-import App
-import Globals
 import os
 import re
-import tempfile
 import types
 import urllib2
+import tempfile
+from time import time
+from email import Encoders
+from email.MIMEBase import MIMEBase
+
+from AccessControl import allow_module
+from AccessControl import getSecurityManager
+from AccessControl import ModuleSecurityInfo
+
+from DateTime import DateTime
+
+from zope.i18n import translate
+from zope.i18n.locales import locales
+from zope.component import queryUtility
+
+from plone.memoize import ram
+from plone.registry.interfaces import IRegistry
+
+from Products.CMFCore.utils import getToolByName
+from Products.CMFPlone.utils import safe_unicode
+from Products.Archetypes.public import DisplayList
+
+from weasyprint import HTML, CSS, default_url_fetcher
+
+from bika.lims import api as api
+from bika.lims import logger
+from bika.lims.browser import BrowserView
+
 
 ModuleSecurityInfo('email.Utils').declarePublic('formataddr')
 allow_module('csv')
@@ -57,6 +60,7 @@ def t(i18n_msg):
     """
     return to_utf8(translate(to_unicode(i18n_msg)))
 
+
 # Wrapper for PortalTransport's sendmail - don't know why there sendmail
 # method is marked private
 ModuleSecurityInfo('Products.bika.utils').declarePublic('sendmail')
@@ -75,12 +79,14 @@ class js_log(BrowserView):
         """
         self.logger.info(message)
 
+
 class js_err(BrowserView):
 
     def __call__(self, message):
         """Javascript sends a string for us to place into the error log
         """
-        self.logger.error(message);
+        self.logger.error(message)
+
 
 ModuleSecurityInfo('Products.bika.utils').declarePublic('printfile')
 
@@ -99,6 +105,7 @@ def _cache_key_getUsers(method, context, roles=[], allow_empty=True):
     key = time() // (60 * 60), roles, allow_empty
     return key
 
+
 @ram.cache(_cache_key_getUsers)
 def getUsers(context, roles, allow_empty=True):
     """ Present a DisplayList containing users in the specified
@@ -116,17 +123,11 @@ def getUsers(context, roles, allow_empty=True):
     pairs.sort(lambda x, y: cmp(x[1], y[1]))
     return DisplayList(pairs)
 
-def isActive(obj):
+
+def isActive(object_or_brain):
     """ Check if obj is inactive or cancelled.
     """
-    wf = getToolByName(obj, 'portal_workflow')
-    if (hasattr(obj, 'inactive_state') and obj.inactive_state == 'inactive') or \
-       wf.getInfoFor(obj, 'inactive_state', 'active') == 'inactive':
-        return False
-    if (hasattr(obj, 'cancellation_state') and obj.inactive_state == 'cancelled') or \
-       wf.getInfoFor(obj, 'cancellation_state', 'active') == 'cancelled':
-        return False
-    return True
+    return api.is_active(object_or_brain)
 
 
 def formatDateQuery(context, date_id):
@@ -248,6 +249,7 @@ def encode_header(header, charset='utf-8'):
 def zero_fill(matchobj):
     return matchobj.group().zfill(8)
 
+
 num_sort_regex = re.compile('\d+')
 
 ModuleSecurityInfo('Products.bika.utils').declarePublic('sortable_title')
@@ -286,7 +288,7 @@ def logged_in_client(context, member=None):
     client = None
     groups_tool = context.portal_groups
     member_groups = [groups_tool.getGroupById(group.id).getGroupName()
-                 for group in groups_tool.getGroupsByUserId(member.id)]
+                     for group in groups_tool.getGroupsByUserId(member.id)]
 
     if 'Clients' in member_groups:
         for obj in context.clients.objectValues("Client"):
@@ -326,7 +328,7 @@ def changeWorkflowState(content, wf_id, state_id, acquire_permissions=False,
         'comments': "Setting state to %s" % state_id,
         'review_state': state_id,
         'time': DateTime(),
-        }
+    }
 
     # Updating wf_state from keyword args
     for k in kw.keys():
@@ -363,6 +365,33 @@ def isnumber(s):
         return True
     except ValueError:
         return False
+
+
+def bika_url_fetcher(url):
+    """Basically the same as the default_url_fetcher from WeasyPrint,
+    but injects the __ac cookie to make an authenticated request to the resource.
+    """
+    from weasyprint import VERSION_STRING
+    from weasyprint.compat import Request
+    from weasyprint.compat import urlopen_contenttype
+
+    request = api.get_request()
+    __ac = request.cookies.get("__ac", "")
+
+    if request.get_header("HOST") in url:
+        result, mime_type, charset = urlopen_contenttype(
+            Request(url,
+                    headers={
+                        'Cookie': "__ac={}".format(__ac),
+                        'User-Agent': VERSION_STRING,
+                        'Authorization': request._auth,
+                    }))
+        return dict(file_obj=result,
+                    redirected_url=result.geturl(),
+                    mime_type=mime_type,
+                    encoding=charset)
+
+    return default_url_fetcher(url)
 
 
 def createPdf(htmlreport, outfile=None, css=None, images={}):
@@ -402,7 +431,7 @@ def createPdf(htmlreport, outfile=None, css=None, images={}):
 
     # render
     htmlreport = to_utf8(htmlreport)
-    renderer = HTML(string=htmlreport, encoding='utf-8')
+    renderer = HTML(string=htmlreport, url_fetcher=bika_url_fetcher, encoding='utf-8')
     pdf_fn = outfile if outfile else tempfile.mktemp(suffix=".pdf")
     if css:
         renderer.write_pdf(pdf_fn, stylesheets=[CSS(string=css_def)])
@@ -415,6 +444,7 @@ def createPdf(htmlreport, outfile=None, css=None, images={}):
     for fn in cleanup:
         os.remove(fn)
     return pdf_data
+
 
 def attachPdf(mimemultipart, pdfreport, filename=None):
     part = MIMEBase('application', "pdf")
@@ -440,13 +470,14 @@ def get_invoice_item_description(obj):
     return description
 
 
-
 def currency_format(context, locale):
     locale = locales.getLocale(locale)
     currency = context.bika_setup.getCurrency()
     symbol = locale.numbers.currencies[currency].symbol
+
     def format(val):
         return '%s %0.2f' % (symbol, val)
+
     return format
 
 
@@ -463,6 +494,7 @@ def getHiddenAttributesForClass(classname):
             'Probem accessing optionally hidden attributes in registry')
 
     return []
+
 
 def isAttributeHidden(classname, fieldname):
     try:
@@ -491,6 +523,7 @@ def dicts_to_dict(dictionaries, key_subfieldname):
         result[d[key_subfieldname]] = d
     return result
 
+
 def format_supsub(text):
     """
     Mainly used for Analysis Service's unit. Transform the text adding
@@ -509,7 +542,7 @@ def format_supsub(text):
     insubsup = True
     for c in text:
         if c == '(':
-            if insubsup == False:
+            if insubsup is False:
                 out.append(c)
                 clauses.append(')')
             else:
@@ -534,11 +567,11 @@ def format_supsub(text):
             continue
 
         elif c == ' ':
-            if insubsup == True:
+            if insubsup is True:
                 out.append(subsup.pop())
             else:
                 out.append(c)
-        elif c in ['+','-']:
+        elif c in ['+', '-']:
             if len(clauses) == 0 and len(subsup) > 0:
                 out.append(subsup.pop())
             out.append(c)
@@ -549,10 +582,11 @@ def format_supsub(text):
 
     while True:
         if len(subsup) == 0:
-            break;
+            break
         out.append(subsup.pop())
 
     return ''.join(out)
+
 
 def drop_trailing_zeros_decimal(num):
     """ Drops the trailinz zeros from decimal value.
@@ -560,6 +594,7 @@ def drop_trailing_zeros_decimal(num):
     """
     out = str(num)
     return out.rstrip('0').rstrip('.') if '.' in out else out
+
 
 def checkPermissions(permissions=[], obj=None):
     """
@@ -580,6 +615,7 @@ def checkPermissions(permissions=[], obj=None):
         if not sm.checkPermission(perm, obj):
             return ''
     return True
+
 
 def getFromString(obj, string):
     attrobj = obj

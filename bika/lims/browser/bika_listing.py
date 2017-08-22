@@ -1,28 +1,18 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
-""" Display lists of items in tables.
-"""
 import json
-import re
-import urllib
-from operator import itemgetter
+import copy
 
-import App
-import pkg_resources
 import plone
-import transaction
-from Acquisition import aq_parent, aq_inner
+from Acquisition import aq_inner
 from DateTime import DateTime
-from OFS.interfaces import IOrderedContainer
 from Products.AdvancedQuery import And, Or, MatchRegexp, Between, Generic, Eq
-from Products.Archetypes.config import REFERENCE_CATALOG
-from Products.CMFCore.WorkflowCore import WorkflowException
 from Products.CMFCore.utils import getToolByName
-from Products.CMFPlone import PloneMessageFactory
-from Products.CMFPlone.utils import pretty_title_or_id, isExpired, safe_unicode
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
 from bika.lims import PMF
 from bika.lims import bikaMessageFactory as _
@@ -32,26 +22,49 @@ from bika.lims.interfaces import IFieldIcons
 from bika.lims.subscribers import doActionFor
 from bika.lims.subscribers import skip
 from bika.lims.utils import isActive, getHiddenAttributesForClass
-from bika.lims.utils import t, format_supsub
+from bika.lims.utils import t
 from bika.lims.utils import to_utf8
 from bika.lims.utils import getFromString
 from plone.app.content.browser import tableview
-from plone.app.content.browser.foldercontents import FolderContentsView, FolderContentsTable
-from plone.app.content.browser.interfaces import IFolderContentsView
-from plone.i18n.normalizer.interfaces import IIDNormalizer
+from plone import api as ploneapi
 from zope.component import getAdapters
-from zope.component import getUtility
 from zope.component._api import getMultiAdapter
-from zope.i18nmessageid import MessageFactory
-from zope.interface import Interface
-from zope.interface import implements
-import types
 
 try:
     from plone.batching import Batch
 except:
     # Plone < 4.3
     from plone.app.content.batching import Batch
+
+
+from bika.lims import api
+from plone.memoize.volatile import cache
+from plone.memoize.volatile import store_on_context
+
+
+def gen_key(brain_or_object):
+    obj = api.get_object(brain_or_object)
+    uid = api.get_uid(obj)
+    modified = obj.modified().ISO8601()
+    return "{}-{}".format(uid, modified)
+
+
+def gen_ar_cache_key(ar):
+    ar = api.get_object(ar)
+    keys = []
+    keys.append(gen_key(ar))
+    for att in ar.getAttachment():
+        keys.append(gen_key(att))
+    for an in ar.getAnalyses():
+        keys.append(gen_key(an))
+    return "-".join(keys)
+
+
+def cache_key(method, self, obj):
+    portal_type = api.get_portal_type(obj)
+    if portal_type == "AnalysisRequest":
+        return gen_ar_cache_key(obj)
+    return gen_key(obj)
 
 
 class WorkflowAction:
@@ -77,27 +90,33 @@ class WorkflowAction:
         self.portal_url = self.portal.absolute_url()
 
     def _get_form_workflow_action(self):
-        """ Retrieve the workflow action from the submitted form """
-        # "workflow_action" is the edit border transition
-        # "workflow_action_button" is the bika_listing table buttons
-        form = self.request.form
+        """Retrieve the workflow action from the submitted form
+
+            - "workflow_action" is the edit border transition
+            - "workflow_action_button" is the bika_listing table buttons
+        """
+        request = self.request
+        form = request.form
         came_from = "workflow_action"
         action = form.get(came_from, '')
+
         if not action:
             came_from = "workflow_action_button"
             action = form.get('workflow_action_id', '')
             if not action:
                 if self.destination_url == "":
-                    self.destination_url = self.request.get_header("referer",
-                                           self.context.absolute_url())
-                self.request.response.redirect(self.destination_url)
+                    url = self.context.absolute_url()
+                    self.destination_url = request.get_header("referer", url)
+                request.response.redirect(self.destination_url)
                 return None, None
+
         # A condition in the form causes Plone to sometimes send two actions
         if type(action) in (list, tuple):
             action = action[0]
+
         return (action, came_from)
 
-    def _get_selected_items(self, full_objects = True):
+    def _get_selected_items(self, full_objects=True):
         """ return a list of selected form objects
             full_objects defaults to True
         """
@@ -107,7 +126,7 @@ class WorkflowAction:
         selected_items = {}
         for uid in form.get('uids', []):
             try:
-                item = uc(UID = uid)[0].getObject()
+                item = uc(UID=uid)[0].getObject()
             except:
                 # ignore selected item if object no longer exists
                 continue
@@ -152,23 +171,49 @@ class WorkflowAction:
             self.request.response.redirect(self.destination_url)
             return
 
-        url = self.context.absolute_url() + "/portal_factory/" + \
-              "AnalysisRequest/Request new analyses/ar_add" + \
+        url = self.context.absolute_url() + "/ar_add" + \
               "?ar_count={0}".format(len(objects)) + \
               "&copy_from={0}".format(",".join(objects.keys()))
         self.request.response.redirect(url)
         return
 
+    def workflow_action_print_stickers(self):
+        """Invoked from an AR listing form in the current context, passing the selected AR
+        titles and default sticker template as request parameters.
+        """
+        objects = WorkflowAction._get_selected_items(self)
+        if not objects:
+            message = self.context.translate(
+                _("No ARs have been selected"))
+            self.context.plone_utils.addPortalMessage(message, 'info')
+            self.destination_url = self.context.absolute_url()
+            self.request.response.redirect(self.destination_url)
+            return
+
+        ids = []
+        for key in objects.keys():
+            ids.append(objects[key].Title())
+        url = self.context.absolute_url() + "/sticker?autoprint=1&template=%s&items=%s" % (
+                self.portal.bika_setup.getAutoStickerTemplate(),
+                ','.join(ids))
+        self.request.response.redirect(url)
+        return
+
     def __call__(self):
-        form = self.request.form
+        request = self.request
+        form = request.form
         plone.protect.CheckAuthenticator(form)
+
         if self.destination_url == "":
-            self.destination_url = self.request.get_header("referer",
-                                   self.context.absolute_url())
+            self.destination_url = request.get_header("referer",
+                                                      self.context.absolute_url())
 
         action, came_from = self._get_form_workflow_action()
 
         if action:
+            # bika_listing sometimes gives us a list of items?
+            if type(action) == list:
+                action = action[0]
             # Call out to the workflow action method
             # Use default bika_listing.py/WorkflowAction for other transitions
             method_name = 'workflow_action_' + action
@@ -180,6 +225,16 @@ class WorkflowAction:
                 method()
             else:
                 self.workflow_action_default(action, came_from)
+        elif form.get('bika_listing_filter_bar_submit', ''):
+            # Getting all the filter inputs with the key starting with:
+            # 'bika_listing_filter_bar_'
+            filter_val = \
+                [[k, v] for k, v in form.items()
+                    if k.startswith('bika_listing_filter_bar_')]
+            filter_val = json.dumps(filter_val)
+            # Adding the filter parameters to cookue
+            self.request.response.setCookie(
+                'bika_listing_filter_bar', filter_val, path='/', max_age=10)
         else:
             # Do nothing
             self.request.response.redirect(self.destination_url)
@@ -203,8 +258,7 @@ class WorkflowAction:
             if not isActive(item) and action not in ('reinstate', 'activate'):
                 continue
             if not skip(item, action, peek=True):
-                allowed_transitions = [it['id'] for it in \
-                                       workflow.getTransitionsFor(item)]
+                allowed_transitions = [it['id'] for it in workflow.getTransitionsFor(item)]
                 if action in allowed_transitions:
                     success = False
                     # if action is "verify" and the item is an analysis or
@@ -214,15 +268,16 @@ class WorkflowAction:
                     if (action == 'verify' and
                         hasattr(item, 'getNumberOfVerifications') and
                         hasattr(item, 'getNumberOfRequiredVerifications')):
+
                         success = True
                         revers = item.getNumberOfRequiredVerifications()
                         nmvers = item.getNumberOfVerifications()
-                        username=getToolByName(self.context,'portal_membership').getAuthenticatedMember().getUserName()
+                        username = getToolByName(self.context, 'portal_membership').getAuthenticatedMember().getUserName()
                         item.addVerificator(username)
-                        if revers-nmvers <= 1:
+                        if revers - nmvers <= 1:
                             success, message = doActionFor(item, action)
                             if not success:
-                                # If failed, remove the last verification
+                                # If failed, delete last verificator.
                                 item.deleteLastVerificator()
                     else:
                         success, message = doActionFor(item, action)
@@ -230,6 +285,7 @@ class WorkflowAction:
                         transitioned.append(item.id)
                     else:
                         self.context.plone_utils.addPortalMessage(message, 'error')
+
         # automatic label printing
         if transitioned and action == 'receive' \
             and 'receive' in self.portal.bika_setup.getAutoPrintStickers():
@@ -237,12 +293,13 @@ class WorkflowAction:
             # selected_items is a list of UIDs (stickers for AR_add use IDs)
             q += ",".join(transitioned)
             dest = self.context.absolute_url() + q
+            self.destination_url = dest
 
         return len(transitioned), dest
 
 
 class BikaListingView(BrowserView):
-    """
+    """Base View for Bika Table Listings
     """
     template = ViewPageTemplateFile("templates/bika_listing.pt")
     render_items = ViewPageTemplateFile("templates/bika_listing_table_items.pt")
@@ -325,6 +382,7 @@ class BikaListingView(BrowserView):
     # and complted inline.  This is useful for list which will have many
     # thousands of entries in many categories, where loading the entire list
     # in HTML would be very slow.
+    # If you want to use service categories set this option ajax_categories_url
     ajax_categories = False
 
     # using the following attribute, some python class may add a CSS class
@@ -377,11 +435,11 @@ class BikaListingView(BrowserView):
     #               introduced via ajax.
     # - input_width: size attribute applied to input widget in edit mode
     columns = {
-           'obj_type': {'title': _('Type')},
-           'id': {'title': _('ID')},
-           'title_or_id': {'title': _('Title')},
-           'modified': {'title': _('Last modified')},
-           'state_title': {'title': _('State')},
+        'obj_type': {'title': _('Type')},
+        'id': {'title': _('ID')},
+        'title_or_id': {'title': _('Title')},
+        'modified': {'title': _('Last modified')},
+        'state_title': {'title': _('State')},
     }
 
     # Additional indexes to be searched
@@ -406,12 +464,16 @@ class BikaListingView(BrowserView):
     # They will need to be handled manually in the appropriate WorkflowAction
     # subclass.
     review_states = [
-        {'id':'default',
-         'contentFilter':{},
-         'title': _('All'),
-         'columns':['obj_type', 'title_or_id', 'modified', 'state_title']
-         },
+        {
+            'id': 'default',
+            'contentFilter': {},
+            'title': _('All'),
+            'columns': ['obj_type', 'title_or_id', 'modified', 'state_title']
+        },
     ]
+    # The advanced filter bar instance, it is initialized using
+    # getAdvancedFilterBar
+    _advfilterbar = None
 
     def __init__(self, context, request, **kwargs):
         self.field_icons = {}
@@ -419,11 +481,11 @@ class BikaListingView(BrowserView):
         path = hasattr(context, 'getPath') and context.getPath() \
             or "/".join(context.getPhysicalPath())
         if hasattr(self, 'contentFilter'):
-            if not 'path' in self.contentFilter:
-                self.contentFilter['path'] = {"query": path, "level" : 0 }
+            if 'path' not in self.contentFilter:
+                self.contentFilter['path'] = {"query": path, "level": 0}
         else:
-            if not 'path' in self.contentFilter:
-                self.contentFilter = {'path': {"query": path, "level" : 0 }}
+            if 'path' not in self.contentFilter:
+                self.contentFilter = {'path': {"query": path, "level": 0}}
 
         if 'show_categories' in kwargs:
             self.show_categories = kwargs['show_categories']
@@ -491,8 +553,6 @@ class BikaListingView(BrowserView):
             TextIndex.  Else, AdvancedQuery.Generic is used.
         """
         form_id = self.form_id
-        form = self.request.form
-        workflow = getToolByName(self.context, 'portal_workflow')
         catalog = getToolByName(self.context, self.catalog)
 
         # Some ajax calls duplicate form values?  I have not figured out why!
@@ -508,65 +568,71 @@ class BikaListingView(BrowserView):
             or form_id not in self.request.get('rows_only', form_id):
             return ''
 
-        self.rows_only = self.request.get('rows_only','') == form_id
-        self.limit_from = int(self.request.get(form_id + '_limit_from',0))
+        self.rows_only = self.request.get('rows_only', '') == form_id
+        self.limit_from = int(self.request.get(form_id + '_limit_from', 0))
 
         # contentFilter is allowed in every self.review_state.
         for k, v in self.review_state.get('contentFilter', {}).items():
             self.contentFilter[k] = v
 
-        # sort on
-        self.sort_on = self.sort_on \
-            if hasattr(self, 'sort_on') and self.sort_on \
-            else None
+        # SORTING
+        # Precedence is request, sort_on attribute, contentFilter sort_on value
+        self.sort_on = getattr(self, "sort_on", self.contentFilter.get("sort_on"))
         self.sort_on = self.request.get(form_id + '_sort_on', self.sort_on)
         self.sort_order = self.request.get(form_id + '_sort_order', 'ascending')
         self.manual_sort_on = self.request.get(form_id + '_manual_sort_on', None)
 
         if self.sort_on:
             if self.sort_on in self.columns.keys():
-               if self.columns[self.sort_on].get('index', None):
-                   self.request.set(form_id+'_sort_on', self.sort_on)
-                   # The column can be sorted directly using an index
-                   idx = self.columns[self.sort_on]['index']
-                   self.sort_on = idx
-                   # Don't sort manually!
-                   self.manual_sort_on = None
-               else:
-                   # The column must be manually sorted using python
-                   self.manual_sort_on = self.sort_on
+                if self.columns[self.sort_on].get('index', None):
+                    self.request.set(form_id + '_sort_on', self.sort_on)
+                    # The column can be sorted directly using an index
+                    idx = self.columns[self.sort_on]['index']
+                    self.sort_on = idx
+                    # Don't sort manually!
+                    self.manual_sort_on = None
+                else:
+                    # The column must be manually sorted using python
+                    self.manual_sort_on = self.sort_on
+            elif self.sort_on in ["sortable_title"]:
+                logger.info("{}: sort_on={}".format(
+                    self.__class__.__name__, self.sort_on))
             else:
                 # We cannot sort for a column that doesn't exist!
                 msg = "{}: sort_on is '{}', not a valid column".format(
-                    self, self.sort_on)
+                    self.__class__.__name__, self.sort_on)
                 logger.error(msg)
                 self.sort_on = None
 
         if self.manual_sort_on:
-            self.manual_sort_on = self.manual_sort_on[0] \
-                                if type(self.manual_sort_on) in (list, tuple) \
-                                else self.manual_sort_on
+            if type(self.manual_sort_on) in (list, tuple):
+                self.manual_sort_on = self.manual_sort_on[0]
             if self.manual_sort_on not in self.columns.keys():
                 # We cannot sort for a column that doesn't exist!
                 msg = "{}: manual_sort_on is '{}', not a valid column".format(
-                    self, self.manual_sort_on)
+                    self.__class__.__name__, self.manual_sort_on)
                 logger.error(msg)
                 self.manual_sort_on = None
 
         if self.sort_on or self.manual_sort_on:
             # By default, if sort_on is set, sort the items ASC
             # Trick to allow 'descending' keyword instead of 'reverse'
-            self.sort_order = 'reverse' if self.sort_order \
-                                        and self.sort_order[0] in ['d','r'] \
-                                        else 'ascending'
+            if self.sort_order != "ascending":
+                self.sort_order = "descending"
         else:
             # By default, sort on created
-            self.sort_order = 'reverse'
+            self.sort_order = 'descending'
             self.sort_on = 'created'
 
         self.contentFilter['sort_order'] = self.sort_order
         if self.sort_on:
-            self.contentFilter['sort_on'] = self.sort_on
+            # Ensure we have a valid sort_on index is valid
+            if self.sort_on not in catalog.indexes():
+                logger.warn("{}: Sort index 'sort_on={}' is not in available indexes "
+                            "for the requested catalog '{}'.".format(
+                                self.__class__.__name__, self.sort_on, self.catalog))
+            else:
+                self.contentFilter['sort_on'] = self.sort_on
 
         # pagesize
         pagesize = self.request.get(form_id + '_pagesize', self.pagesize)
@@ -585,14 +651,14 @@ class BikaListingView(BrowserView):
         # index filters.
         self.And = []
         self.Or = []
-        ##logger.info("contentFilter: %s"%self.contentFilter)
+        # logger.info("contentFilter: %s"%self.contentFilter)
         for k, v in self.columns.items():
-            if not v.has_key('index') \
+            if 'index' not in v \
                or v['index'] == 'review_state' \
                or v['index'] in self.filter_indexes:
                 continue
             self.filter_indexes.append(v['index'])
-        ##logger.info("Filter indexes: %s"%self.filter_indexes)
+        # logger.info("Filter indexes: %s"%self.filter_indexes)
 
         # any request variable named ${form_id}_{index_name}
         # will pass it's value to that index in self.contentFilter.
@@ -607,11 +673,11 @@ class BikaListingView(BrowserView):
             request_key = "%s_%s" % (form_id, index)
             value = self.request.get(request_key, '')
             if len(value) > 1:
-                ##logger.info("And: %s=%s"%(index, value))
+                # logger.info("And: %s=%s"%(index, value))
                 if idx.meta_type in('ZCTextIndex', 'FieldIndex'):
                     self.And.append(MatchRegexp(index, value))
                 elif idx.meta_type == 'DateIndex':
-                    logger.info("Unhandled DateIndex search on '%s'"%index)
+                    logger.info("Unhandled DateIndex search on '%s'" % index)
                     continue
                 else:
                     self.Or.append(Generic(index, value))
@@ -631,7 +697,7 @@ class BikaListingView(BrowserView):
                                  "(Perhaps the index is still empty)." %
                                  (index, self.catalog))
                     continue
-                ##logger.info("Or: %s=%s"%(index, value))
+                # logger.info("Or: %s=%s"%(index, value))
                 if idx.meta_type in('ZCTextIndex', 'FieldIndex'):
                     self.Or.append(MatchRegexp(index, value))
                     self.expand_all_categories = True
@@ -641,7 +707,7 @@ class BikaListingView(BrowserView):
                         valroot = vals[0]
                         for i in range(1, len(vals)):
                             valroot = '%s-%s' % (valroot, vals[i])
-                            self.Or.append(MatchRegexp(index, valroot+'-*'))
+                            self.Or.append(MatchRegexp(index, valroot + '-*'))
                             self.expand_all_categories = True
                 elif idx.meta_type == 'DateIndex':
                     if type(value) in (list, tuple):
@@ -650,7 +716,7 @@ class BikaListingView(BrowserView):
                         try:
                             lohi = [DateTime(x) for x in value.split(":")]
                         except:
-                            logger.info("Error (And, DateIndex='%s', term='%s')"%(index,value))
+                            logger.info("Error (And, DateIndex='%s', term='%s')" % (index, value))
                         self.Or.append(Between(index, lohi[0], lohi[1]))
                         self.expand_all_categories = True
                     else:
@@ -658,7 +724,7 @@ class BikaListingView(BrowserView):
                             self.Or.append(Eq(index, DateTime(value)))
                             self.expand_all_categories = True
                         except:
-                            logger.info("Error (Or, DateIndex='%s', term='%s')"%(index,value))
+                            logger.info("Error (Or, DateIndex='%s', term='%s')" % (index, value))
                 else:
                     self.Or.append(Generic(index, value))
                     self.expand_all_categories = True
@@ -678,7 +744,7 @@ class BikaListingView(BrowserView):
         try:
             toggles = {}
             # request OR cookie OR default
-            toggles = json.loads(self.request.get(self.form_id+"_toggle_cols",
+            toggles = json.loads(self.request.get(self.form_id + "_toggle_cols",
                                  self.request.get("toggle_cols", "{}")))
         except:
             pass
@@ -688,9 +754,9 @@ class BikaListingView(BrowserView):
         cookie_key = "%s%s" % (self.context.portal_type, self.form_id)
         toggle_cols = toggles.get(cookie_key,
                                   [col for col in self.columns.keys()
-                                   if col in self.review_state['columns']
-                                   and ('toggle' not in self.columns[col]
-                                        or self.columns[col]['toggle'] == True)])
+                                   if col in self.review_state['columns'] and
+                                   ('toggle' not in self.columns[col] or
+                                    self.columns[col]['toggle'] is True)])
         return toggle_cols
 
     def GET_url(self, include_current=True, **kwargs):
@@ -699,22 +765,22 @@ class BikaListingView(BrowserView):
         query = {}
         if include_current:
             for k, v in self.request.form.items():
-                if k.startswith(self.form_id + "_") and not "uids" in k:
+                if k.startswith(self.form_id + "_") and "uids" not in k:
                     query[k] = v
         # override from self attributes
         for x in "pagesize", "review_state", "sort_order", "sort_on", "limit_from":
             if str(getattr(self, x, None)) != 'None':
                 # I don't understand why on AR listing, getattr(self,x)
                 # is a dict, but this line will resolve LIMS-1420
-                if x == "review_state" and type(getattr(self, x))==dict:
-                    query['%s_%s'%(self.form_id, x)] = getattr(self, x)['id']
+                if x == "review_state" and type(getattr(self, x)) == dict:
+                    query['%s_%s' % (self.form_id, x)] = getattr(self, x)['id']
                 else:
-                    query['%s_%s'%(self.form_id, x)] = getattr(self, x)
+                    query['%s_%s' % (self.form_id, x)] = getattr(self, x)
         # then override with passed kwargs
         for x in kwargs.keys():
-            query['%s_%s'%(self.form_id, x)] = kwargs.get(x)
+            query['%s_%s' % (self.form_id, x)] = kwargs.get(x)
         if query:
-            url = url + "?" + "&".join(["%s=%s"%(x,y) for x,y in query.items()])
+            url = url + "?" + "&".join(["%s=%s" % (x, y) for x, y in query.items()])
         return url
 
     def __call__(self):
@@ -725,7 +791,27 @@ class BikaListingView(BrowserView):
         if self.ajax_categories and not self.category_index:
             msg = "category_index must be defined when using ajax_categories."
             raise AssertionError(msg)
+        # Getting the bika_listing_filter_bar cookie
+        cookie_value = self.request.get('bika_listing_filter_bar', '')
+        self.request.response.setCookie(
+            'bika_listing_filter_bar', None, path='/', max_age=0)
+        # Saving the filter bar values
+        cookie_filter_bar = ''
+        if cookie_value is not None and \
+           cookie_value not in ([], '', [None]): #There maybe more
+            try:
+                cookie_filter_bar = json.loads(cookie_value)
+            except ValueError, e:
+                logger.error(
+                    'BikaListingView: cannot parse cookie value %s (%s)' % (
+                        str(e), cookie_value))
 
+
+        # Creating a dict from cookie data
+        cookie_data = {}
+        for k, v in cookie_filter_bar:
+            cookie_data[k] = v
+        self.save_filter_bar_values(cookie_data)
         self._process_request()
 
         # ajax_category_expand is included in the form if this form submission
@@ -786,7 +872,146 @@ class BikaListingView(BrowserView):
         """
         return item
 
-    def folderitems(self, full_objects = False):
+    def get_icon(self, obj):
+        plone_layout = api.get_view(
+            "plone_layout", context=obj, request=self.request)
+        return plone_layout.getIcon(obj)
+
+    def get_workflow_info(self, obj):
+        out = {}
+        workflow = api.get_tool('portal_workflow')
+        for wf in workflow.getWorkflowsFor(obj):
+            state = wf._getWorkflowStateOf(obj).id
+            state_var = wf.state_var
+            out[state_var] = state
+        return out
+
+    def get_fti(self, obj):
+        portal_types = api.get_tool('portal_types')
+        portal_type = api.get_portal_type(obj)
+        return portal_types.get(portal_type)
+
+    def get_type_title(self, obj):
+        fti = self.get_fti(obj)
+        if fti is None:
+            return api.get_portal_type(obj)
+        return fti.Title()
+
+    @cache(cache_key, store_on_context)
+    def make_listing_item(self, obj):
+        """Returns an object dictionary suitable for the listing view
+        """
+
+        # ensure we have an object
+        obj = api.get_object(obj)
+
+        # prepare some data
+        id = api.get_id(obj)
+        uid = api.get_uid(obj)
+        url = api.get_url(obj)
+        relative_url = obj.absolute_url(relative=True)
+        title = api.get_title(obj)
+        description = api.get_description(obj)
+        portal_type = api.get_portal_type(obj)
+        path = api.get_path(obj)
+        fti = self.get_fti(obj)
+        icon = self.get_icon(obj)
+        created = self.ulocalized_time(obj.created())
+        modified = self.ulocalized_time(obj.modified())
+        css_class = {}
+
+        # get the workflow states for all the attached workflows
+        states = self.get_workflow_info(obj)
+        state_class = ""
+        for state in states.values():
+            state_class += "state-{} ".format(state)
+
+        type_title_msgid = self.get_type_title(obj)
+        url_href_title = '%s at %s: %s' % (
+            t(type_title_msgid), path, to_utf8(description))
+
+        # element css classes
+        plone_utils = api.get_tool('plone_utils')
+        type_class = 'contenttype-' + \
+            plone_utils.normalizeString(portal_type)
+
+        workflow = api.get_tool("portal_workflow")
+        try:
+            review_state = workflow.getInfoFor(obj, 'review_state')
+            wf_state_title = workflow.getTitleForStateOnType(review_state, portal_type)
+            state_title = _(wf_state_title)
+        except:
+            review_state = "active"
+            state_title = _("Active")
+
+        #for state_var, state in states.items():
+        #    if not state_title:
+        #        state_title = workflow.getTitleForStateOnType(state, portal_type)
+        #    item.update({
+        #        state_var: state
+        #    })
+
+        # allow field icons to alert in a listing row
+        for name, adapter in getAdapters((obj, ), IFieldIcons):
+            alerts = adapter()
+            if alerts and uid in alerts:
+                if uid in self.field_icons:
+                    self.field_icons[uid].extend(alerts[uid])
+                else:
+                    self.field_icons[uid] = alerts[uid]
+
+        return {
+            "obj": obj,
+            "id": id,
+            "uid": uid,
+            "url": url,
+            "relative_url": relative_url,
+            "title": title,
+            "description": description,
+            "portal_type": portal_type,
+            "path": path,
+            "icon": icon.html_tag(),
+            "created": created,
+            "modified": modified,
+            "review_state": review_state,
+            "state_title": state_title,
+            "states": states,
+            "state_class": state_class,
+            "url_href_title": url_href_title,
+            "class": css_class,
+            "item_data": "[]",
+            "table_row_class": "",
+            "category": "None",
+            "path": path,
+            "fti": fti,
+            "obj_type": obj.Type,
+            "size": obj.getObjSize,
+            "type_class": type_class,
+            "view_url": api.get_url(obj),
+            # a list of lookups for single-value-select fields
+            "choices": {},
+            # a dict where the column name works as a key and the value is
+            # the name of the field related with the column. It is used
+            # when the name given to the column and the content field it
+            # represents diverges. bika_listing_table_items.pt defines an
+            # attribute for each item, this attribute is named 'field' and
+            # the system fills it taking advantage of this dictionary or
+            # the name of the column if it isn't defined in the dict.
+            "field": {},
+            # a list of names of fields that may be edited on this item
+            "allow_edit": [],
+            # a list of names of fields that are compulsory (if editable)
+            "required": [],
+            # "before", "after" and replace: dictionary (key is column ID)
+            # A snippet of HTML which will be rendered
+            # before/after/instead of the table cell content.
+            "before": {},
+            "after": {},
+            "replace": {},
+        }
+
+
+    def folderitems(self, full_objects=False):
         """
         >>> portal = layer['portal']
         >>> portal_url = portal.absolute_url()
@@ -800,34 +1025,34 @@ class BikaListingView(BrowserView):
         >>> browser.open(portal_url+"/bika_setup/bika_sampletypes/folder_view?",
         ... "list_pagesize=10&list_review_state=default")
         >>> browser.contents
-        '...Water...'
+        '...Apple Pulp...'
         """
 
-        #self.contentsMethod = self.context.getFolderContents
+        # self.contentsMethod = self.context.getFolderContents
         if not hasattr(self, 'contentsMethod'):
             self.contentsMethod = getToolByName(self.context, self.catalog)
 
         context = aq_inner(self.context)
-        plone_layout = getMultiAdapter((context, self.request), name = u'plone_layout')
-        plone_utils = getToolByName(context, 'plone_utils')
-        plone_view = getMultiAdapter((context, self.request), name = u'plone')
-        portal_properties = getToolByName(context, 'portal_properties')
-        portal_types = getToolByName(context, 'portal_types')
         workflow = getToolByName(context, 'portal_workflow')
-        site_properties = portal_properties.site_properties
-        norm = getUtility(IIDNormalizer).normalize
+
         if self.request.get('show_all', '').lower() == 'true' \
-                or self.show_all == True \
+                or self.show_all is True \
                 or self.pagesize == 0:
             show_all = True
         else:
             show_all = False
 
+        contentFilterTemp = copy.deepcopy(self.contentFilter)
+        addition = self.get_filter_bar_queryaddition()
+
+        if addition:
+            contentFilterTemp.update(addition)
+
         if (hasattr(self, 'And') and self.And) \
            or (hasattr(self, 'Or') and self.Or):
             # if contentsMethod is capable, we do an AdvancedQuery.
             if hasattr(self.contentsMethod, 'makeAdvancedQuery'):
-                aq = self.contentsMethod.makeAdvancedQuery(self.contentFilter)
+                aq = self.contentsMethod.makeAdvancedQuery(contentFilterTemp)
                 if hasattr(self, 'And') and self.And:
                     tmpAnd = And()
                     for q in self.And:
@@ -841,9 +1066,11 @@ class BikaListingView(BrowserView):
                 brains = self.contentsMethod.evalAdvancedQuery(aq)
             else:
                 # otherwise, self.contentsMethod must handle contentFilter
-                brains = self.contentsMethod(self.contentFilter)
+                brains = self.contentsMethod(contentFilterTemp)
         else:
-            brains = self.contentsMethod(self.contentFilter)
+            logger.debug(
+                    "Bika Listing Table Query={}".format(contentFilterTemp))
+            brains = self.contentsMethod(contentFilterTemp)
 
         # idx increases one unit each time an object is added to the 'items'
         # dictionary to be returned. Note that if the item is not rendered,
@@ -851,8 +1078,10 @@ class BikaListingView(BrowserView):
         idx = 0
         results = []
         self.show_more = False
+
         brains = brains[self.limit_from:]
         for i, obj in enumerate(brains):
+
             # avoid creating unnecessary info for items outside the current
             # batch;  only the path is needed for the "select all" case...
             # we only take allowed items into account
@@ -860,10 +1089,6 @@ class BikaListingView(BrowserView):
                 # Maximum number of items to be shown reached!
                 self.show_more = True
                 break
-
-            # we don't know yet if it's a brain or an object
-            path = hasattr(obj, 'getPath') and obj.getPath() or \
-                 "/".join(obj.getPhysicalPath())
 
             # This item must be rendered, we need the object instead of a brain
             obj = obj.getObject() if hasattr(obj, 'getObject') else obj
@@ -873,109 +1098,8 @@ class BikaListingView(BrowserView):
             if not obj or not self.isItemAllowed(obj):
                 continue
 
-            uid = obj.UID()
-            title = obj.Title()
-            description = obj.Description()
-            icon = plone_layout.getIcon(obj)
-            url = obj.absolute_url()
-            relative_url = obj.absolute_url(relative = True)
-
-            fti = portal_types.get(obj.portal_type)
-            if fti is not None:
-                type_title_msgid = fti.Title()
-            else:
-                type_title_msgid = obj.portal_type
-
-            url_href_title = '%s at %s: %s' % (
-                t(type_title_msgid),
-                path,
-                to_utf8(description))
-
-            modified = self.ulocalized_time(obj.modified()),
-
-            # element css classes
-            type_class = 'contenttype-' + \
-                plone_utils.normalizeString(obj.portal_type)
-
-            state_class = ''
-            states = {}
-            for w in workflow.getWorkflowsFor(obj):
-                state = w._getWorkflowStateOf(obj).id
-                states[w.state_var] = state
-                state_class += "state-%s " % state
-
-            results_dict = dict(
-                obj = obj,
-                id = obj.getId(),
-                title = title,
-                uid = uid,
-                path = path,
-                url = url,
-                fti = fti,
-                item_data = json.dumps([]),
-                url_href_title = url_href_title,
-                obj_type = obj.Type,
-                size = obj.getObjSize,
-                modified = modified,
-                icon = icon.html_tag(),
-                type_class = type_class,
-                # a list of lookups for single-value-select fields
-                choices = {},
-                state_class = state_class,
-                relative_url = relative_url,
-                view_url = url,
-                table_row_class = "",
-                category = 'None',
-
-                # a list of names of fields that may be edited on this item
-                allow_edit = [],
-
-                # a list of names of fields that are compulsory (if editable)
-                required = [],
-                # a dict where the column name works as a key and the value is
-                # the name of the field related with the column. It is used
-                # when the name given to the column and the content field it
-                # represents diverges. bika_listing_table_items.pt defines an
-                # attribute for each item, this attribute is named 'field' and
-                # the system fills it taking advantage of this dictionary or
-                # the name of the column if it isn't defined in the dict.
-                field={},
-                # "before", "after" and replace: dictionary (key is column ID)
-                # A snippet of HTML which will be rendered
-                # before/after/instead of the table cell content.
-                before = {}, # { before : "<a href=..>" }
-                after = {},
-                replace = {},
-            )
-            try:
-                rs = workflow.getInfoFor(obj, 'review_state')
-                st_title = workflow.getTitleForStateOnType(rs, obj.portal_type)
-                st_title = t(PMF(st_title))
-            except:
-                rs = 'active'
-                st_title = None
-            if rs:
-                results_dict['review_state'] = rs
-            for state_var, state in states.items():
-                if not st_title:
-                    st_title = workflow.getTitleForStateOnType(
-                        state, obj.portal_type)
-                results_dict[state_var] = state
-            results_dict['state_title'] = st_title
-
-            # extra classes for individual fields on this item { field_id : "css classes" }
-            results_dict['class'] = {}
-            for name, adapter in getAdapters((obj, ), IFieldIcons):
-                auid = obj.UID() if hasattr(obj, 'UID') and callable(obj.UID) else None
-                if not auid:
-                    continue
-                alerts = adapter()
-                # logger.info(str(alerts))
-                if alerts and auid in alerts:
-                    if auid in self.field_icons:
-                        self.field_icons[auid].extend(alerts[auid])
-                    else:
-                        self.field_icons[auid] = alerts[auid]
+            # create a listing item
+            results_dict = self.make_listing_item(obj)
 
             # Search for values for all columns in obj
             for key in self.columns.keys():
@@ -1007,23 +1131,27 @@ class BikaListingView(BrowserView):
             item = self.folderitem(obj, results_dict, idx)
             if item:
                 results.append(item)
-                idx+=1
+                idx += 1
+
 
         # Need manual_sort?
         # Note that the order has already been set in contentFilter, so
         # there is no need to reverse
         if self.manual_sort_on:
-            results.sort(lambda x,y:cmp(x.get(self.manual_sort_on, ''),
-                                     y.get(self.manual_sort_on, '')))
+            results.sort(lambda x, y: cmp(x.get(self.manual_sort_on, ''),
+                                          y.get(self.manual_sort_on, '')))
+
 
         return results
 
-    def contents_table(self, table_only = False):
+
+
+    def contents_table(self, table_only=False):
         """ If you set table_only to true, then nothing outside of the
             <table/> tag will be printed (form tags, authenticator, etc).
             Then you can insert your own form tags around it.
         """
-        table = BikaListingTable(bika_listing = self, table_only = table_only)
+        table = BikaListingTable(bika_listing=self, table_only=table_only)
         return table.render(self)
 
     def rendered_items(self):
@@ -1035,9 +1163,6 @@ class BikaListingView(BrowserView):
         self.cat = self.request.get('ajax_category_expand')
         self.contentFilter[self.category_index] = self.request.get('cat')
 
-        # selected review_state must be adhered to
-        st_id = self.request.get('review_state')
-
         # These are required to allow the template to work with this class as
         # the view.  Normally these are attributes of class BikaListingTable.
         self.bika_listing = self
@@ -1046,6 +1171,28 @@ class BikaListingView(BrowserView):
 
         data = self.render_items()
         return data
+
+    def get_transitions_for_items(self, items):
+        """Extract Worfklow transitions for the bika listing items
+        """
+        workflow = ploneapi.portal.get_tool('portal_workflow')
+        out = {}
+
+        # helper method to extract the object from an bika listing item
+        def get_object_from_item(item):
+            obj = item.get("obj")
+            if hasattr(obj, "getObject") and callable(obj.getObject):
+                return obj.getObject()
+            return obj
+
+        # extract all objects from the items
+        objects = map(get_object_from_item, self.items)
+
+        for obj in objects:
+            for transition in workflow.getTransitionsFor(obj):
+                # append the transition by its id to the transitions dictionary
+                out[transition['id']] = transition
+        return out
 
     def get_workflow_actions(self):
         """ Compile a list of possible workflow transitions for items
@@ -1056,33 +1203,31 @@ class BikaListingView(BrowserView):
         if not self.show_select_column:
             return []
 
-        workflow = getToolByName(self.context, 'portal_workflow')
-
         # get all transitions for all items.
-        transitions = {}
+        transitions = self.get_transitions_for_items(self.items)
+
+        # The actions which will be displayed in the listing view
         actions = []
-        for obj in [i.get('obj', '') for i in self.items]:
-            obj = hasattr(obj, 'getObject') and obj.getObject() or obj
-            for it in workflow.getTransitionsFor(obj):
-                transitions[it['id']] = it
 
         # the list is restricted to and ordered by these transitions.
         if 'transitions' in self.review_state:
-            for transition_dict in self.review_state['transitions']:
-                if transition_dict['id'] in transitions:
-                    actions.append(transitions[transition_dict['id']])
+            for transition in self.review_state['transitions']:
+                if transition['id'] in transitions:
+                    actions.append(transitions[transition['id']])
         else:
             actions = transitions.values()
 
         new_actions = []
         # remove any invalid items with a warning
-        for a,action in enumerate(actions):
-            if isinstance(action, dict) \
-                    and 'id' in action:
+        for action in actions:
+            if isinstance(action, dict) and 'id' in action:
                 new_actions.append(action)
             else:
-                logger.warning("bad action in custom_actions: %s. (complete list: %s)."%(action,actions))
+                logger.warning("bad action in custom_actions: {}. (complete list: {}).".format(
+                    action, actions))
+
         actions = new_actions
+
         # and these are removed
         if 'hide_transitions' in self.review_state:
             actions = [a for a in actions
@@ -1091,19 +1236,20 @@ class BikaListingView(BrowserView):
         # cheat: until workflow_action is abolished, all URLs defined in
         # GS workflow setup will be ignored, and the default will apply.
         # (that means, WorkflowAction-bound URL is called).
-        for i, action in enumerate(actions):
-            actions[i]['url'] = ''
+        for action in actions:
+            action['url'] = ''
 
         # if there is a self.review_state['some_state']['custom_actions'] attribute
         # on the BikaListingView, add these actions to the list.
         if 'custom_actions' in self.review_state:
             for action in self.review_state['custom_actions']:
-                if isinstance(action, dict) \
-                        and 'id' in action:
+                if isinstance(action, dict) and 'id' in action:
                     actions.append(action)
 
-        for a,action in enumerate(actions):
-            actions[a]['title'] = t(PMF(actions[a]['id'] + "_transition_title"))
+        # # translate the workflow action title for the template
+        # for action in actions:
+        #     action['title'] = t(_(action['title']))
+
         return actions
 
     def getPriorityIcon(self):
@@ -1120,13 +1266,66 @@ class BikaListingView(BrowserView):
             i += 1
             yield i
 
+    def getFilterBar(self):
+        """
+        This function creates an instance of BikaListingFilterBar if the
+        class has not created one yet.
+        :return: a BikaListingFilterBar instance
+        """
+        self._advfilterbar = self._advfilterbar if self._advfilterbar else \
+            BikaListingFilterBar(context=self.context, request=self.request)
+        return self._advfilterbar
+
+    def save_filter_bar_values(self, filter_bar_items={}):
+        """
+        This function saves the values to filter the bika_listing inside the
+        BikaListingFilterBar object.
+        :filter_bar_items: an array of tuples with the items to define the
+        query. The array has the following format: [(key, value), (), ...]
+        """
+        self.getFilterBar().save_filter_bar_values(filter_bar_items)
+
+    def get_filter_bar_queryaddition(self):
+        """
+        This function calls the filter bar get_filter_bar_queryaddition
+        from self._advfilterbar in order to obtain the obtain the extra filter
+        conditions.
+        """
+        if self.getFilterBar():
+            return self.getFilterBar().get_filter_bar_queryaddition()
+        else:
+            return {}
+
+    def get_filter_bar_values(self):
+        """
+        This function calls the filter bar get_filter_bar_dict
+        from the filterbar object in order to obtain the filter values.
+        :return: a dictionary
+        """
+        return self.getFilterBar().get_filter_bar_dict()
+
+    def filter_bar_check_item(self, item):
+        """
+        This functions receives a key-value items, and checks if it should be
+        displayed.
+        It is recomended to be used in isItemAllowed() method.
+        This function should be only used for those fields without
+        representation as an index in the catalog.
+        :item: The item to check.
+        :return: boolean
+        """
+        if self.getFilterBar():
+            return self.getFilterBar().filter_bar_check_item(item)
+        else:
+            return True
+
 
 class BikaListingTable(tableview.Table):
 
     render = ViewPageTemplateFile("templates/bika_listing_table.pt")
     render_items = ViewPageTemplateFile("templates/bika_listing_table_items.pt")
 
-    def __init__(self, bika_listing = None, table_only = False):
+    def __init__(self, bika_listing=None, table_only=False):
         self.table = self
         self.table_only = table_only
         self.bika_listing = bika_listing
@@ -1142,7 +1341,7 @@ class BikaListingTable(tableview.Table):
                                  bika_listing.base_url,
                                  bika_listing.view_url,
                                  folderitems,
-                                 pagesize = self.pagesize)
+                                 pagesize=self.pagesize)
 
         self.context = bika_listing.context
         self.request = bika_listing.request
@@ -1160,7 +1359,7 @@ class BikaListingTable(tableview.Table):
         :return: rendered HTML text
         """
         self.cat = cat
-        for key,val in kwargs.items():
+        for key, val in kwargs.items():
             self.__setattr__(key, val)
             self.bika_listing.__setattr__(key, val)
         selected_cats = self.bika_listing.selected_cats(self.batch)
@@ -1196,3 +1395,128 @@ class BikaListingTable(tableview.Table):
         while True:
             i += 1
             yield i
+
+
+class BikaListingFilterBar(BrowserView):
+    """
+    This class defines a filter bar to make advanced queries in
+    BikaListingView. This filter shouldn't override the 'filter by state'
+    functionality
+    """
+    _render = ViewPageTemplateFile("templates/bika_listing_filter_bar.pt")
+    _filter_bar_dict = {}
+
+    def render(self):
+        """
+        Returns a ViewPageTemplateFile instance with the filter inputs and
+        submit button.
+        """
+        return self._render()
+
+    def setRender(self, new_template):
+        """
+        Defines a new template to render.
+        :new_template: should be a ViewPageTemplateFile object such as
+            'ViewPageTemplateFile("templates/bika_listing_filter_bar.pt")'
+        """
+        if new_template:
+            self._render = new_template
+
+    def filter_bar_button_title(self):
+        """
+        This function returns a string with the name for the input. A function
+        is used in order to translate the name.
+        :return: an string with the title.
+        """
+        return _('Filter')
+
+    def save_filter_bar_values(self, filter_bar_items={}):
+        """
+        This function saves the values to filter the bika_listing inside the
+        BikaListingFilterBar object.
+        The dictionary is saved inside a class attribute.
+        This function tranforms the unicodes to strings and removes the
+        'bika_listing_filter_bar_' starting string of each key.
+        :filter_bar_items: a dictionary with the items to define the
+        query.
+        """
+        if filter_bar_items:
+            new_dict = {}
+            for k in filter_bar_items.keys():
+                value = str(filter_bar_items[k])
+                key = str(k).replace("bika_listing_filter_bar_", "")
+                new_dict[key] = value
+            self._filter_bar_dict = new_dict
+
+    def get_filter_bar_dict(self):
+        """
+        Returns the _filter_bar_dict attribute
+        """
+        return self._filter_bar_dict
+
+    def get_filter_bar_queryaddition(self):
+        """
+        This function gets the values from the filter bar inputs in order to
+        create a catalog query accordingly.
+        Only returns the items that can be added to contentFilter dictionary,
+        this means that only the dictionary items (key-value) with index
+        representations should be returned.
+        :return: a dictionary to be added to contentFilter.
+        """
+        return {}
+
+    def filter_bar_check_item(self, item):
+        """
+        This functions receives a key-value items, and checks if it should be
+        displayed.
+        It is recomended to be used in isItemAllowed() method.
+        This function should be only used for those fields without
+        representation as an index in the catalog.
+        :item: The item to check.
+        :return: boolean.
+        """
+        return True
+
+    def filter_bar_builder(self):
+        """
+        The template is going to call this method to create the filter bar in
+        bika_listing_filter_bar.pt
+        If the method returns None, the filter bar will not be shown.
+        :return: a list of dictionaries as the filtering fields or None.
+
+        Eaxh dictionary defines a field, those are the expected elements
+        for each field type by the default template:
+        - select/multiple:
+            {
+                'name': 'field_name',
+                'label': _('Field name'),
+                'type': 'select/multiple',
+                'voc': <a DisplayList object containing the options>,
+            }
+        - simple text input:
+            {
+                'name': 'field_name',
+                'label': _('Field name'),
+                'type': 'text',
+            }
+        - autocomplete text input:
+            {
+                'name': 'field_name',
+                'label': _('Field name'),
+                'type': 'autocomplete_text',
+                'voc': <a List object containing the options in JSON>,
+            }
+        - value range input:
+            {
+                'name': 'field_name',
+                'label': _('Field name'),
+                'type': 'range',
+            },
+        - date range input:
+            {
+                'name': 'field_name',
+                'label': _('Field name'),
+                'type': 'date_range',
+            },
+        """
+        return None

@@ -2,7 +2,7 @@
 	xmlns:tal="http://xml.zope.org/namespaces/tal"
 	xmlns:metal="http://xml.zope.org/namespaces/metal"
 	xmlns:i18n="http://xml.zope.org/namespaces/i18n"
-	i18n:domain="plone">
+	i18n:domain="bika">
 <head><title></title></head>
 <body>
 	<metal:view_macro define-macro="view">
@@ -20,7 +20,7 @@
 					accessor python: field.getAccessor(context);
 					current_field_value accessor;
 					sort_on python:(('Title', 'nocase', 'asc'),);
-					ReferenceDefinitions python:sequence.sort([p.getObject() for p in context.bika_setup_catalog(portal_type='ReferenceDefinition')], sort_on);
+					ReferenceDefinitions python:sequence.sort([p.getObject() for p in context.bika_setup_catalog(portal_type='ReferenceDefinition', inactive_state='active')], sort_on);
 					BlankDefinitions python: [r for r in ReferenceDefinitions if r['Blank']];
 					ControlDefinitions python: [r for r in ReferenceDefinitions if not r['Blank']];
 					types context/getAnalysisTypes;
