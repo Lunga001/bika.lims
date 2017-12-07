@@ -37,20 +37,29 @@
   <include file="supplier.zcml"/>
   <include file="supplyorder.zcml"/>
   <include file="supplyorderfolder.zcml"/>
-  <include file="viewlets.zcml"/>
   <include file="arimports.zcml"/>
 
   <include package=".analysisrequest"/>
   <include package=".batch"/>
   <include package=".client"/>
+  <include package=".idserver"/>
   <include package=".samplinground"/>
   <include package=".srtemplate"/>
   <include package=".sample"/>
   <include package=".worksheet"/>
+  <include package=".viewlets"/>
 
   <include package=".fields"/>
   <include package=".widgets"/>
   <include package=".reports"/>
+
+  <browser:page
+      for="*"
+      name="aggregatedanalyses"
+      class="bika.lims.browser.aggregatedanalyses.AggregatedAnalysesView"
+      permission="zope.Public"
+      layer="bika.lims.interfaces.IBikaLIMS"
+    />
 
   <browser:page
       for="*"

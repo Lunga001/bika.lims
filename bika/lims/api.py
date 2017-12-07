@@ -1,25 +1,40 @@
 # -*- coding: utf-8 -*-
 #
-# Bika LIMS Framwork API
+# This file is part of Bika LIMS
+#
+# Copyright 2011-2017 by it's authors.
+# Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from Acquisition import aq_base
 from AccessControl.PermissionRole import rolesForPermissionOn
 
 from Products.CMFPlone.utils import base_hasattr
 from Products.CMFCore.interfaces import ISiteRoot
+from Products.CMFCore.interfaces import IFolderish
 from Products.Archetypes.BaseObject import BaseObject
 from Products.ZCatalog.interfaces import ICatalogBrain
+from Products.CMFPlone.utils import _createObjectByType
 from Products.CMFCore.WorkflowCore import WorkflowException
 
 from zope import globalrequest
-from zope.lifecycleevent import modified
+from zope.event import notify
+from zope.interface import implements
+from zope.component import getUtility
 from zope.component import getMultiAdapter
+from zope.component.interfaces import IFactory
+from zope.component.interfaces import ObjectEvent
+from zope.component.interfaces import IObjectEvent
+from zope.lifecycleevent import modified
+from zope.lifecycleevent import ObjectCreatedEvent
 from zope.security.interfaces import Unauthorized
 
 from plone import api as ploneapi
+from plone.memoize.volatile import DontCache
 from plone.api.exc import InvalidParameterError
 from plone.dexterity.interfaces import IDexterityContent
 from plone.app.layout.viewlets.content import ContentHistoryView
+from plone.i18n.normalizer.interfaces import IFileNameNormalizer
+from plone.i18n.normalizer.interfaces import IIDNormalizer
 
 from bika.lims import logger
 
@@ -41,7 +56,9 @@ achieve the same::
 
     >>> foos = map(get_foo, list_of_brain_objects)
 
-Please add for all of your functions a descriptive test in docs/API.rst. Thanks.
+Please add for all of your functions a descriptive test in docs/API.rst.
+
+Thanks.
 """
 
 _marker = object()
@@ -49,6 +66,43 @@ _marker = object()
 
 class BikaLIMSError(Exception):
     """Base exception class for bika.lims errors."""
+
+
+class IBikaTransitionEvent(IObjectEvent):
+    """Bika WF transition event interface"""
+
+
+class IBikaBeforeTransitionEvent(IBikaTransitionEvent):
+    """Fired before the transition is invoked"""
+
+
+class IBikaAfterTransitionEvent(IBikaTransitionEvent):
+    """Fired after the transition done"""
+
+
+class IBikaTransitionFailedEvent(IBikaTransitionEvent):
+    """Fired if the transition failed"""
+
+
+class BikaTransitionEvent(ObjectEvent):
+    """Bika WF transition event"""
+    def __init__(self, obj, transition, exception=None):
+        ObjectEvent.__init__(self, obj)
+        self.obj = obj
+        self.transition = transition
+        self.exception = exception
+
+
+class BikaBeforeTransitionEvent(BikaTransitionEvent):
+    implements(IBikaBeforeTransitionEvent)
+
+
+class BikaAfterTransitionEvent(BikaTransitionEvent):
+    implements(IBikaAfterTransitionEvent)
+
+
+class BikaTransitionFailedEvent(BikaTransitionEvent):
+    implements(IBikaTransitionFailedEvent)
 
 
 def get_portal():
@@ -66,8 +120,11 @@ def get_bika_setup():
     return portal.get("bika_setup")
 
 
-def create(container, portal_type, title=None, **kwargs):
+def create(container, portal_type, *args, **kwargs):
     """Creates an object in Bika LIMS
+
+    This code uses most of the parts from the TypesTool
+    see: `Products.CMFCore.TypesTool._constructInstance`
 
     :param container: container
     :type container: ATContentType/DexterityContentType/CatalogBrain
@@ -77,10 +134,36 @@ def create(container, portal_type, title=None, **kwargs):
     :type title: string
     :returns: The new created object
     """
-    title = title is None and "New {}".format(portal_type) or title
-    _ = container.invokeFactory(portal_type, id="tmpID", title=title)
-    obj = container.get(_)
-    obj.processForm()
+    from bika.lims.utils import tmpID
+    if kwargs.get("title") is None:
+        kwargs["title"] = "New {}".format(portal_type)
+
+    # generate a temporary ID
+    tmp_id = tmpID()
+
+    # get the fti
+    types_tool = get_tool("portal_types")
+    fti = types_tool.getTypeInfo(portal_type)
+
+    if fti.product:
+        obj = _createObjectByType(portal_type, container, tmp_id)
+    else:
+        # newstyle factory
+        factory = getUtility(IFactory, fti.factory)
+        obj = factory(tmp_id, *args, **kwargs)
+        if hasattr(obj, '_setPortalTypeName'):
+            obj._setPortalTypeName(fti.getId())
+        notify(ObjectCreatedEvent(obj))
+        # notifies ObjectWillBeAddedEvent, ObjectAddedEvent and ContainerModifiedEvent
+        container._setObject(tmp_id, obj)
+        # we get the object here with the current object id, as it might be renamed
+        # already by an event handler
+        obj = container._getOb(obj.getId())
+
+    obj.edit(**kwargs)
+    # handle AT Content
+    if is_at_content(obj):
+        obj.processForm()
     # explicit notification
     modified(obj)
     return obj
@@ -109,6 +192,24 @@ def fail(msg=None):
     raise BikaLIMSError("{}".format(msg))
 
 
+def is_object(brain_or_object):
+    """Check if the passed in object is a supported portal content object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: Portal Object
+    :returns: True if the passed in object is a valid portal content
+    """
+    if is_portal(brain_or_object):
+        return True
+    if is_at_content(brain_or_object):
+        return True
+    if is_dexterity_content(brain_or_object):
+        return True
+    if is_brain(brain_or_object):
+        return True
+    return False
+
+
 def get_object(brain_or_object):
     """Get the full content object
 
@@ -117,16 +218,11 @@ def get_object(brain_or_object):
     /CatalogBrain
     :returns: The full object
     """
-
-    if is_portal(brain_or_object):
-        return brain_or_object
-    if is_at_content(brain_or_object):
-        return brain_or_object
-    if is_dexterity_content(brain_or_object):
-        return brain_or_object
+    if not is_object(brain_or_object):
+        fail("{} is not supported.".format(repr(brain_or_object)))
     if is_brain(brain_or_object):
         return brain_or_object.getObject()
-    fail("{} is not supported.".format(brain_or_object))
+    return brain_or_object
 
 
 def is_portal(brain_or_object):
@@ -173,6 +269,34 @@ def is_at_content(brain_or_object):
     return isinstance(brain_or_object, BaseObject)
 
 
+def is_folderish(brain_or_object):
+    """Checks if the passed in object is folderish
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: True if the object is folderish
+    :rtype: bool
+    """
+    if hasattr(brain_or_object, "is_folderish"):
+        if callable(brain_or_object.is_folderish):
+            return brain_or_object.is_folderish()
+        return brain_or_object.is_folderish
+    return IFolderish.providedBy(get_object(brain_or_object))
+
+
+def get_portal_type(brain_or_object):
+    """Get the portal type for this object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Portal type
+    :rtype: string
+    """
+    if not is_object(brain_or_object):
+        fail("{} is not supported.".format(repr(brain_or_object)))
+    return brain_or_object.portal_type
+
+
 def get_schema(brain_or_object):
     """Get the schema of the content
 
@@ -184,7 +308,7 @@ def get_schema(brain_or_object):
     if is_portal(obj):
         fail("get_schema can't return schema of portal root")
     if is_dexterity_content(obj):
-        pt = get_portal_catalog()
+        pt = get_tool("portal_types")
         fti = pt.getTypeInfo(obj.portal_type)
         return fti.lookupSchema()
     if is_at_content(obj):
@@ -203,8 +327,9 @@ def get_fields(brain_or_object):
     obj = get_object(brain_or_object)
     schema = get_schema(obj)
     if is_dexterity_content(obj):
-        # XXX implement properly for Dexterity content types
-        return dict.fromkeys(schema.names())
+        names = schema.names()
+        fields = map(lambda name: schema.get(name), names)
+        return dict(zip(names, fields))
     return dict(zip(schema.keys(), schema.fields()))
 
 
@@ -454,15 +579,13 @@ def get_parent(brain_or_object, catalog_search=False):
     return get_object(brain_or_object).aq_parent
 
 
-def search(query, catalog=_marker, show_inactive=False):
+def search(query, catalog=_marker):
     """Search for objects.
 
     :param query: A suitable search query.
     :type query: dict
     :param catalog: A single catalog id or a list of catalog ids
     :type catalog: str/list
-    :param show_inactive: Include inactive or dormant objects
-    :type show_inactive: Boolean
     :returns: Search results
     :rtype: List of ZCatalog brains
     """
@@ -471,92 +594,37 @@ def search(query, catalog=_marker, show_inactive=False):
     if not isinstance(query, dict):
         fail("Catalog query needs to be a dictionary")
 
-    # The catalogs to query
+    # Portal types to query
+    portal_types = query.get("portal_type", [])
+    # We want the portal_type as a list
+    if not isinstance(portal_types, (tuple, list)):
+        portal_types = [portal_types]
+
+    # The catalogs used for the query
     catalogs = []
 
-    # The user requested one or more explicit catalog query.
-    if catalog is not _marker:
+    # The user did **not** specify a catalog
+    if catalog is _marker:
+        # Find the registered catalogs for the queried portal types
+        for portal_type in portal_types:
+            # Just get the first registered/default catalog
+            catalogs.append(get_catalogs_for(
+                portal_type, default="portal_catalog")[0])
+    else:
+        # User defined catalogs
         if isinstance(catalog, (list, tuple)):
             catalogs.extend(map(get_tool, catalog))
         else:
             catalogs.append(get_tool(catalog))
 
-    # Implicit queries require knowledge about the `portal_type` to search.
-    portal_types = query.get("portal_type", None)
+    # Cleanup: Avoid duplicate catalogs
+    catalogs = list(set(catalogs)) or [get_portal_catalog()]
 
-    # If no portal_type was found and no catalogs were specified,
-    # execute a standard catalog search
-    if not portal_types and not catalogs:
-        return get_portal_catalog()(query)
+    # We only support **single** catalog queries
+    if len(catalogs) > 1:
+        fail("Multi Catalog Queries are not supported, please specify a catalog.")
 
-    # We want the portal_type as a list
-    if not isinstance(portal_types, (tuple, list)):
-        portal_types = [portal_types]
-
-    # Use the archetypes_tool to gather the right catalogs
-    archetype_tool = get_tool("archetype_tool", None)
-    # but only if the user did not specify any catalogs explicitly
-    if archetype_tool and not catalogs:
-        for portal_type in portal_types:
-            # we just want the first of the registered catalogs
-            catalogs.extend(archetype_tool.getCatalogsByType(portal_type)[:1])
-        # avoid duplicate catalogs
-        catalogs = list(set(catalogs))
-
-    # gracefully fall-back to the `portal_catalog`
-    if not catalogs:
-        catalogs = [get_portal_catalog()]
-
-    # With a single catalog, we don't have to care about merging the results
-    if len(catalogs) == 1:
-        brains = catalogs[0](query)
-        # Avoid inactive or dormant items
-        if not show_inactive:
-            return filter(is_active, brains)
-        return brains
-
-    # Multiple catalog results need to be merged
-    results = dict()
-    for catalog in catalogs:
-        for brain in catalog(query):
-            # Avoid duplicates
-            results[brain.UID] = brain
-
-    # The search results of all catalog queries are now mixed, so we have to
-    # order them according to the search spec
-    search_results = results.values()
-
-    # Avoid inactive or dormant items.
-    if not show_inactive:
-        search_results = filter(is_active, search_results)
-
-    # Handle the `limit`, `sort_order` and the `sort_on` manually
-    sort_on = query.get("sort_on", "created")
-    sort_order = query.get("sort_order", "ascending")
-
-    limit = query.get("limit")
-    try:
-        if limit:
-            limit = int(limit)
-    except ValueError:
-        logger.warn("search: limit should be int, received {}.".format(limit))
-        limit = None
-
-    def _sort_on(x, y):
-        x = safe_getattr(x, sort_on, x)
-        y = safe_getattr(y, sort_on, y)
-        # we can only compare objects of the same type
-        if type(x) != type(y):
-            return 0
-        return cmp(x, y)
-
-    # sort according to the `sort_on` and `sort_order`
-    reverse = sort_order in ["descending", "reverse"] and True or False
-    search_results = sorted(search_results, cmp=_sort_on, reverse=reverse)
-    # check for a search limit
-    if limit:
-        return search_results[:int(limit)]
-    return search_results
+    return catalogs[0](query)
 
 
 def safe_getattr(brain_or_object, attr, default=_marker):
@@ -635,26 +703,173 @@ def get_revision_history(brain_or_object):
 def get_workflows_for(brain_or_object):
     """Get the assigned workflows for the given brain or context.
 
+    Note: This function supports also the portal_type as parameter.
+
     :param brain_or_object: A single catalog brain or content object
     :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
     :returns: Assigned Workflows
     :rtype: tuple
     """
-    obj = get_object(brain_or_object)
     workflow = ploneapi.portal.get_tool("portal_workflow")
+    if isinstance(brain_or_object, basestring):
+        return workflow.getChainFor(brain_or_object)
+    obj = get_object(brain_or_object)
     return workflow.getChainFor(obj)
 
 
-def get_workflow_status_of(brain_or_object):
+def get_workflow_status_of(brain_or_object, state_var="review_state"):
     """Get the current workflow status of the given brain or context.
 
     :param brain_or_object: A single catalog brain or content object
     :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :param state_var: The name of the state variable
+    :type state_var: string
     :returns: Status
     :rtype: str
     """
+    workflow = get_tool("portal_workflow")
     obj = get_object(brain_or_object)
-    return ploneapi.content.get_state(obj)
+    return workflow.getInfoFor(ob=obj, name=state_var)
+
+
+def get_creation_date(brain_or_object):
+    """Get the creation date of the brain or object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Creation date
+    :rtype: DateTime
+    """
+    created = getattr(brain_or_object, "created", None)
+    if created is None:
+        fail("Object {} has no creation date ".format(
+             repr(brain_or_object)))
+    if callable(created):
+        return created()
+    return created
+
+
+def get_modification_date(brain_or_object):
+    """Get the modification date of the brain or object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Modification date
+    :rtype: DateTime
+    """
+    modified = getattr(brain_or_object, "modified", None)
+    if modified is None:
+        fail("Object {} has no modification date ".format(
+             repr(brain_or_object)))
+    if callable(modified):
+        return modified()
+    return modified
+
+
+def get_review_status(brain_or_object):
+    """Get the `review_state` of an object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Value of the review_status variable
+    :rtype: String
+    """
+    if is_brain(brain_or_object):
+        return brain_or_object.review_state
+    return get_workflow_status_of(brain_or_object, state_var="review_state")
+
+
+def get_cancellation_status(brain_or_object, default="active"):
+    """Get the `cancellation_state` of an object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Value of the review_status variable
+    :rtype: String
+    """
+    if is_brain(brain_or_object):
+        return getattr(brain_or_object, "cancellation_state", default)
+    workflows = get_workflows_for(brain_or_object)
+    if 'bika_cancellation_workflow' not in workflows:
+        return default
+    return get_workflow_status_of(brain_or_object, 'cancellation_state')
+
+
+def get_inactive_status(brain_or_object, default="active"):
+    """Get the `cancellation_state` of an objct
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Value of the review_status variable
+    :rtype: String
+    """
+    if is_brain(brain_or_object):
+        return getattr(brain_or_object, "inactive_state", default)
+    workflows = get_workflows_for(brain_or_object)
+    if 'bika_inactive_workflow' not in workflows:
+        return default
+    return get_workflow_status_of(brain_or_object, 'inactive_state')
+
+
+def is_active(brain_or_object):
+    """Check if the workflow state of the object is 'inactive' or 'cancelled'.
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: False if the object is in the state 'inactive' or 'cancelled'
+    :rtype: bool
+    """
+    if get_inactive_status(brain_or_object) == "inactive":
+        return False
+    if get_cancellation_status(brain_or_object) == "cancelled":
+        return False
+    return True
+
+
+def get_catalogs_for(brain_or_object, default="portal_catalog"):
+    """Get all registered catalogs for the given portal_type, catalog brain or
+    content object
+
+    :param brain_or_object: The portal_type, a catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: List of supported catalogs
+    :rtype: list
+    """
+    archetype_tool = get_tool("archetype_tool", None)
+    if not archetype_tool:
+        # return the default catalog
+        return [get_tool(default)]
+
+    catalogs = []
+
+    # get the registered catalogs for portal_type
+    if is_object(brain_or_object):
+        catalogs = archetype_tool.getCatalogsByType(
+            get_portal_type(brain_or_object))
+    if isinstance(brain_or_object, basestring):
+        catalogs = archetype_tool.getCatalogsByType(brain_or_object)
+
+    if not catalogs:
+        return [get_tool(default)]
+    return catalogs
+
+
+def get_transitions_for(brain_or_object):
+    """List available workflow transitions for all workflows
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: All possible available and allowed transitions
+    :rtype: list[dict]
+    """
+    workflow = get_tool('portal_workflow')
+    transitions = []
+    instance = get_object(brain_or_object)
+    for wfid in get_workflows_for(brain_or_object):
+        wf = workflow[wfid]
+        tlist = wf.getTransitionsFor(instance)
+        transitions.extend([t for t in tlist if t not in transitions])
+    return transitions
 
 
 def do_transition_for(brain_or_object, transition):
@@ -667,35 +882,18 @@ def do_transition_for(brain_or_object, transition):
     if not isinstance(transition, basestring):
         fail("Transition type needs to be string, got '%s'" % type(transition))
     obj = get_object(brain_or_object)
-    ploneapi.content.transition(obj, transition)
+    # notify the BeforeTransitionEvent
+    notify(BikaBeforeTransitionEvent(obj, transition))
+    try:
+        ploneapi.content.transition(obj, transition)
+    except ploneapi.exc.InvalidParameterError as e:
+        # notify the TransitionFailedEvent
+        notify(BikaTransitionFailedEvent(obj, transition, exception=e))
+        fail("Failed to perform transition '{}' on {}: {}".format(
+             transition, obj, str(e)))
+    # notify the AfterTransitionEvent
+    notify(BikaAfterTransitionEvent(obj, transition))
     return obj
-
-
-def is_active(brain_or_object):
-    """Check if the workflow state of the object is 'inactive' or 'cancelled'.
-
-    :param brain_or_object: A single catalog brain or content object
-    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
-    :returns: False if the object is in the state 'inactive' or 'cancelled'
-    :rtype: bool
-    """
-    if is_brain(brain_or_object):
-        if base_hasattr(brain_or_object, 'inactive_state') and \
-           brain_or_object.inactive_state == 'inactive':
-            return False
-        if base_hasattr(brain_or_object, 'cancellation_state') and \
-           brain_or_object.cancellation_state == 'cancelled':
-            return False
-    obj = get_object(brain_or_object)
-    wf = get_tool('portal_workflow')
-    workflows = get_workflows_for(obj)
-    if 'bika_inactive_workflow' in workflows \
-            and wf.getInfoFor(obj, 'inactive_state') == 'inactive':
-        return False
-    if 'bika_cancellation_workflow' in workflows \
-            and wf.getInfoFor(obj, 'cancellation_state') == 'cancelled':
-        return False
-    return True
 
 
 def get_roles_for_permission(permission, brain_or_object):
@@ -832,3 +1030,66 @@ def get_current_user():
     :returns: Current User
     """
     return ploneapi.user.get_current()
+
+
+def get_cache_key(brain_or_object):
+    """Generate a cache key for a common brain or object
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Cache Key
+    :rtype: str
+    """
+    key = [
+        get_portal_type(brain_or_object),
+        get_id(brain_or_object),
+        get_uid(brain_or_object),
+        # handle different domains gracefully
+        get_url(brain_or_object),
+        # Return the microsecond since the epoch in GMT
+        get_modification_date(brain_or_object).micros(),
+    ]
+    return "-".join(map(lambda x: str(x), key))
+
+
+def bika_cache_key_decorator(method, self, brain_or_object):
+    """Bika cache key decorator usable for
+
+    :param brain_or_object: A single catalog brain or content object
+    :type brain_or_object: ATContentType/DexterityContentType/CatalogBrain
+    :returns: Cache Key
+    :rtype: str
+    """
+    if brain_or_object is None:
+        raise DontCache
+    return get_cache_key(brain_or_object)
+
+
+def normalize_id(string):
+    """Normalize the id
+
+    :param string: A string to normalize
+    :type string: str
+    :returns: Normalized ID
+    :rtype: str
+    """
+    if not isinstance(string, basestring):
+        fail("Type of argument must be string, found '{}'".format(type(string)))
+    # get the id nomalizer utility
+    normalizer = getUtility(IIDNormalizer).normalize
+    return normalizer(string)
+
+
+def normalize_filename(string):
+    """Normalize the filename
+
+    :param string: A string to normalize
+    :type string: str
+    :returns: Normalized ID
+    :rtype: str
+    """
+    if not isinstance(string, basestring):
+        fail("Type of argument must be string, found '{}'".format(type(string)))
+    # get the file nomalizer utility
+    normalizer = getUtility(IFileNameNormalizer).normalize
+    return normalizer(string)

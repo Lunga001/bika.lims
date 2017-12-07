@@ -1,10 +1,12 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from Products.CMFPlone.utils import safe_unicode
-from bika.lims import bikaMessageFactory as _
+from bika.lims import bikaMessageFactory as _, logger
 from bika.lims.utils import t
 from bika.lims.browser.bika_listing import BikaListingView
 from bika.lims.content.instrumentmaintenancetask import InstrumentMaintenanceTaskStatuses as mstatus
@@ -95,6 +97,9 @@ class InstrumentMaintenanceView(BikaListingView):
                          'getMaintainer']},
         ]
 
+    def contentsMethod(self, *args, **kw):
+        return self.context.getMaintenanceTasks()
+
     def folderitems(self):
         items = BikaListingView.folderitems(self)
         outitems = []
@@ -171,6 +176,9 @@ class InstrumentCalibrationsView(BikaListingView):
                          'getCalibrator']},
         ]
 
+    def contentsMethod(self, *args, **kw):
+        return self.context.getCalibrations()
+
     def folderitems(self):
         items = BikaListingView.folderitems(self)
         outitems = []
@@ -227,6 +235,9 @@ class InstrumentValidationsView(BikaListingView):
                          'getDownTo',
                          'getValidator']},
         ]
+
+    def contentsMethod(self, *args, **kw):
+        return self.context.getValidations()
 
     def folderitems(self):
         items = BikaListingView.folderitems(self)
@@ -308,6 +319,9 @@ class InstrumentScheduleView(BikaListingView):
                          'creator',
                          'created']},
         ]
+
+    def contentsMethod(self, *args, **kw):
+        return self.context.getSchedule()
 
     def folderitems(self):
         items = BikaListingView.folderitems(self)
@@ -506,7 +520,14 @@ class InstrumentCertificationsViewView(BrowserView):
     _certificationsview = None
 
     def __call__(self):
-        return self.template()
+        view = self.get_certifications_view()
+        view._process_request()
+        if self.request.get('table_only', '') == view.form_id:
+            return view.contents_table()
+        elif self.request.get('rows_only', '') == view.form_id:
+            return view.contents_table()
+        else:
+            return self.template()
 
     def get_certifications_table(self):
         """ Returns the table of Certifications
@@ -554,7 +575,7 @@ class InstrumentCertificationsView(BikaListingView):
         ]
         self.allow_edit = False
         self.show_select_column = False
-        self.show_workflow_action_buttons = False
+        self.show_workflow_action_buttons = True
         uids = [c.UID() for c in self.context.getCertifications()]
         self.catalog = 'portal_catalog'
         self.contentFilter = {'UID': uids, 'sort_on': 'sortable_title'}
@@ -620,24 +641,37 @@ class InstrumentMultifileView(MultifileView):
         self.description = "Different interesting documents and files to be attached to the instrument"
 
 
-class ajaxGetInstrumentMethod(BrowserView):
+class ajaxGetInstrumentMethods(BrowserView):
     """ Returns the method assigned to the defined instrument.
         uid: unique identifier of the instrument
     """
+    # Modified to return multiple methods after enabling multiple method
+    # for intruments.
     def __call__(self):
-        methoddict = {}
+        out = {
+            "title": None,
+            "instrument": None,
+            "methods": [],
+        }
         try:
             plone.protect.CheckAuthenticator(self.request)
         except Forbidden:
-            return json.dumps(methoddict)
-        bsc = getToolByName(self, 'bika_setup_catalog')
-        instrument = bsc(portal_type='Instrument', UID=self.request.get("uid", '0'))
-        if instrument and len(instrument) == 1:
-            method = instrument[0].getObject().getMethod()
-            if method:
-                methoddict = {'uid': method.UID(),
-                              'title': method.Title()}
-        return json.dumps(methoddict)
+            logger.warn("Forbidden. Request authenticator missing or invalid.")
+            return json.dumps(out)
+        uc = getToolByName(self, 'uid_catalog')
+        brains = uc(UID=self.request.get("uid", '0'))
+        if brains:
+            instrument = brains[0].getObject()
+            out["title"] = instrument.Title()
+            out["instrument"] = instrument.UID()
+            # Handle multiple Methods per instrument
+            methods = instrument.getMethods()
+            for method in methods:
+                out["methods"].append({
+                    "uid": method.UID(),
+                    "title": method.Title(),
+                })
+        return json.dumps(out)
 
 
 class InstrumentQCFailuresViewlet(ViewletBase):

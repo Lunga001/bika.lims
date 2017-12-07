@@ -5,6 +5,9 @@ Bika LIMS API
 The Bika LIMS API provides single functions for single purposes.
 This Test builds completely on the API without any further imports needed.
 
+Running this test from the buildout directory::
+
+    bin/test test_textual_doctests -t API
 
 API
 ===
@@ -114,6 +117,24 @@ No supported objects raise an error::
     Traceback (most recent call last):
     [...]
     BikaLIMSError: <object object at 0x...> is not supported.
+
+To check if an object is supported, e.g. is an ATCT, Dexterity, ZCatalog or
+Portal object, we can use the `is_object` function::
+
+    >>> api.is_object(client)
+    True
+
+    >>> api.is_object(brain)
+    True
+
+    >>> api.is_object(api.get_portal())
+    True
+
+    >>> api.is_object(None)
+    False
+
+  >>> api.is_object(object())
+    False
 
 
 Checking if an Object is the Portal
@@ -470,32 +491,21 @@ Now we create some objects which are located in the `bika_setup_catalog`::
     >>> map(api.get_id, results)
     ['instrument-1', 'instrument-2', 'instrument-3']
 
-If a query requires to search in **multiple catalogs**, the results get merged
-after each search and sorted afterwards::
+Queries which result in multiple catalogs will be refused, as it would require
+manual merging and sorting of the results afterwards. Thus, we fail here:
 
     >>> results = api.search({'portal_type': ['Client', 'ClientFolder', 'Instrument'], 'sort_on': 'getId'})
-    >>> len(results)
-    5
-    >>> map(api.get_id, results)
-    ['client-1', 'clients', 'instrument-1', 'instrument-2', 'instrument-3']
+    Traceback (most recent call last):
+    [...]
+    BikaLIMSError: Multi Catalog Queries are not supported, please specify a catalog.
 
-It is also possible to limit the results::
-
-    >>> results = api.search({'portal_type': ['Client', 'ClientFolder', 'Instrument'], 'sort_on': 'getId', 'limit': 2})
-    >>> len(results)
-    2
-    >>> map(api.get_id, results)
-    ['client-1', 'clients']
-
-We can also specify explicit catalogs to search::
+Catalog queries w/o any `portal_type`, default to the `portal_catalog`, which
+will not find the following items::
 
     >>> analysiscategories = bika_setup.bika_analysiscategories
     >>> analysiscategory1 = api.create(analysiscategories, "AnalysisCategory", title="AC-1")
     >>> analysiscategory2 = api.create(analysiscategories, "AnalysisCategory", title="AC-2")
     >>> analysiscategory3 = api.create(analysiscategories, "AnalysisCategory", title="AC-3")
-
-Because if we don't specify the `portal_type`, the catalog defaults to the
-`portal_catalog`, which will not find this item::
 
     >>> results = api.search({"id": "analysiscategory-1"})
     >>> len(results)
@@ -514,22 +524,52 @@ We could also explicitly define a catalog to achieve the same::
     >>> len(results)
     1
 
-To see inactive or dormant items, we must explicitly request them.  This means
-that even if we explicitly specify the ID of an item that is inactive, it will
-not be returned by default!
+To see inactive or dormant items, we must explicitly query them of filter them
+afterwars manually::
 
     >>> results = api.search({"portal_type": "AnalysisCategory", "id": "analysiscategory-1"})
     >>> len(results)
     1
+
+Now we deactivate the item::
+
     >>> analysiscategory1 = api.do_transition_for(analysiscategory1, 'deactivate')
     >>> api.is_active(analysiscategory1)
     False
+
+The search will still find the item::
+
     >>> results = api.search({"portal_type": "AnalysisCategory", "id": "analysiscategory-1"})
     >>> len(results)
+    1
+
+Unless we filter it out manually::
+
+    >>> len(filter(api.is_active, results))
     0
-    >>> results = api.search({"portal_type": "AnalysisCategory", "id": "analysiscategory-1"}, show_inactive=True)
+
+Or provide a correct query::
+
+    >>> results = api.search({"portal_type": "AnalysisCategory", "id": "analysiscategory-1", "inactive_status": "active"})
     >>> len(results)
     1
+
+
+Getting the registered Catalogs
+-------------------------------
+
+Bika LIMS uses multiple catalogs registered via the Archetype Tool. This
+function returns a list of registered catalogs for a brain or object::
+
+    >>> api.get_catalogs_for(client)
+    [<CatalogTool at /plone/portal_catalog>]
+
+    >>> api.get_catalogs_for(instrument1)
+    [<BikaSetupCatalog at /plone/bika_setup_catalog>, <CatalogTool at /plone/portal_catalog>]
+
+    >>> api.get_catalogs_for(analysiscategory1)
+    [<BikaSetupCatalog at /plone/bika_setup_catalog>]
+
 
 Getting an Attribute of an Object
 ---------------------------------
@@ -595,7 +635,12 @@ This function returns all assigned workflows for a given object::
     ('bika_one_state_workflow',)
 
     >>> api.get_workflows_for(client)
-    ('bika_one_state_workflow', 'bika_inactive_workflow')
+    ('bika_client_workflow', 'bika_inactive_workflow')
+
+This function also supports the portal_type as parameter::
+
+    >>> api.get_workflows_for(api.get_portal_type(client))
+    ('bika_client_workflow', 'bika_inactive_workflow')
 
 
 Getting the Workflow Status of an Object
@@ -605,6 +650,109 @@ This function returns the state of a given object::
 
     >>> api.get_workflow_status_of(client)
     'active'
+
+It is also capable to get the state of another state variable::
+
+    >>> api.get_workflow_status_of(client, "inactive_state")
+    'active'
+
+Deactivate the client::
+
+    >>> api.do_transition_for(client, "deactivate")
+    <Client at /plone/clients/client-1>
+
+    >>> api.get_workflow_status_of(client, "inactive_state")
+    'inactive'
+
+    >>> api.get_workflow_status_of(client)
+    'active'
+
+Reactivate the client::
+
+    >>> api.do_transition_for(client, "activate")
+    <Client at /plone/clients/client-1>
+
+    >>> api.get_workflow_status_of(client, "inactive_state")
+    'active'
+
+
+Getting the available transitions for an object
+-----------------------------------------------
+
+This function returns all possible transitions from all workflows in the
+object's workflow chain.
+
+Let's create a Batch. It should allow us to invoke transitions from two
+workflows; 'close' from the bika_batch_workflow, and 'cancel' from the
+bika_cancellation_workflow::
+
+    >>> batch1 = api.create(portal.batches, "Batch", title="Test Batch")
+    >>> transitions = api.get_transitions_for(batch1)
+    >>> len(transitions)
+    2
+
+The transitions are returned as a list of dictionaries. Since we cannot rely on
+the order of dictionary keys, we will have to satisfy ourselves here with
+checking that the two expected transitions are present in the return value::
+
+    >>> 'Close' in [t['title'] for t in transitions]
+    True
+    >>> 'Cancel' in [t['title'] for t in transitions]
+    True
+
+
+Getting the creation date of an object
+--------------------------------------
+
+This function returns the creation date of a given object::
+
+    >>> created = api.get_creation_date(client)
+    >>> created
+    DateTime('...')
+
+
+Getting the modification date of an object
+------------------------------------------
+
+This function returns the modification date of a given object::
+
+    >>> modified = api.get_modification_date(client)
+    >>> modified
+    DateTime('...')
+
+
+Getting the review state of an object
+-------------------------------------
+
+This function returns the review state of a given object::
+
+    >>> review_state = api.get_review_status(client)
+    >>> review_state
+    'active'
+
+It should also work for catalog brains::
+
+    >>> portal_catalog = api.get_tool("portal_catalog")
+    >>> results = portal_catalog({"portal_type": "Client", "UID": api.get_uid(client)})
+    >>> len(results)
+    1
+    >>> api.get_review_status(results[0]) == review_state
+    True
+
+
+Getting the registered Catalogs of an Object
+--------------------------------------------
+
+This function returns a list of all registered catalogs within the
+`archetype_tool` for a given portal_type or object::
+
+    >>> api.get_catalogs_for(client)
+    [<CatalogTool at /plone/portal_catalog>]
+
+It also supports the `portal_type` as a parameter::
+
+    >>> api.get_catalogs_for("Analysis")
+    [<BikaAnalysisCatalog at /plone/bika_analysis_catalog>]
 
 
 Transitioning an Object
@@ -806,3 +954,117 @@ Getting the current logged in user::
 
     >>> api.get_current_user()
     <MemberData at /plone/portal_memberdata/test_user_1_ used for /plone/acl_users>
+
+
+Creating a Cache Key
+--------------------
+
+This function creates a good cache key for a generic object or brain::
+
+    >>> key1 = api.get_cache_key(client)
+    >>> key1
+    'Client-client-1-...'
+
+This can be also done for a catalog result brain::
+
+    >>> portal_catalog = api.get_tool("portal_catalog")
+    >>> brains = portal_catalog({"portal_type": "Client", "UID": api.get_uid(client)})
+    >>> key2 = api.get_cache_key(brains[0])
+    >>> key2
+    'Client-client-1-...'
+
+The two keys should be equal::
+
+    >>> key1 == key2
+    True
+
+The key should change when the object get modified::
+
+    >>> from zope.lifecycleevent import modified
+    >>> client.setClientID("TESTCLIENT")
+    >>> modified(client)
+    >>> key3 = api.get_cache_key(client)
+    >>> key3 != key1
+    True
+
+.. important:: Workflow changes do not change the modification date!
+               A custom event subscriber will update it therefore.
+
+A workflow transition should also change the cache key::
+
+    >>> _ = api.do_transition_for(client, transition="deactivate")
+    >>> api.get_inactive_status(client)
+    'inactive'
+    >>> key4 = api.get_cache_key(client)
+    >>> key4 != key3
+    True
+
+
+Bika Cache Key decorator
+------------------------
+
+This decorator can be used for `plone.memoize` cache decorators in classes.
+The decorator expects that the first argument is the class instance (`self`) and
+the second argument a brain or object::
+
+    >>> from plone.memoize.volatile import cache
+
+    >>> class BikaClass(object):
+    ...     @cache(api.bika_cache_key_decorator)
+    ...     def get_very_expensive_calculation(self, obj):
+    ...         print "very expensive calculation"
+    ...         return api.get_id(obj)
+
+    >>> instance = BikaClass()
+
+Calling the (expensive) method of the class does the calculation just once::
+
+    >>> instance.get_very_expensive_calculation(client)
+    very expensive calculation
+    'client-1'
+
+    >>> instance.get_very_expensive_calculation(client)
+    'client-1'
+
+The decorator can also handle brains::
+
+    >>> instance.get_very_expensive_calculation(brain)
+    very expensive calculation
+    'client-1'
+
+    >>> instance.get_very_expensive_calculation(brain)
+    'client-1'
+
+
+ID Normalizer
+-------------
+
+Normalizes a string to be usable as a system ID:
+
+    >>> api.normalize_id("My new ID")
+    'my-new-id'
+
+    >>> api.normalize_id("Really/Weird:Name;")
+    'really-weird-name'
+
+    >>> api.normalize_id(None)
+    Traceback (most recent call last):
+    [...]
+    BikaLIMSError: Type of argument must be string, found '<type 'NoneType'>'
+
+
+File Normalizer
+---------------
+
+Normalizes a string to be usable as a file name:
+
+    >>> api.normalize_filename("My new ID")
+    'My new ID'
+
+    >>> api.normalize_filename("Really/Weird:Name;")
+    'Really-Weird-Name'
+
+    >>> api.normalize_filename(None)
+    Traceback (most recent call last):
+    [...]
+    BikaLIMSError: Type of argument must be string, found '<type 'NoneType'>'

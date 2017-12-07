@@ -1,12 +1,14 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from bika.lims.adapters.referencewidgetvocabulary import DefaultReferenceWidgetVocabulary
-from bika.lims.jsonapi import get_include_fields
-from bika.lims.jsonapi import load_brain_metadata
-from bika.lims.jsonapi import load_field_values
+from bika.lims.jsonapi.v1 import get_include_fields
+from bika.lims.jsonapi.v1 import load_brain_metadata
+from bika.lims.jsonapi.v1 import load_field_values
 from bika.lims.utils import dicts_to_dict
 from bika.lims.interfaces import IAnalysisRequest, IClient, IBatch
 from bika.lims.interfaces import IFieldIcons
@@ -30,7 +32,6 @@ from zope.interface import implements
 import json
 
 from .view import AnalysisRequestViewView    # view first.
-from .add import AnalysisRequestAddView
 from .invoice import InvoicePrintView
 from .invoice import InvoiceView
 from invoice import InvoiceCreate
@@ -41,6 +42,11 @@ from .published_results import AnalysisRequestPublishedResults
 from .results_not_requested import AnalysisRequestResultsNotRequestedView
 from .workflow import AnalysisRequestWorkflowAction
 from .analysisrequests import AnalysisRequestsView
+
+# New AR Add form
+from .add2 import AnalysisRequestAddView  # noqa: F401
+from .add2 import AnalysisRequestManageView  # noqa: F401
+from .add2 import ajaxAnalysisRequestAddView  # noqa: F401
 
 
 class ResultOutOfRange(object):

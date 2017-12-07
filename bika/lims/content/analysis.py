@@ -1,57 +1,74 @@
 # -*- coding: utf-8 -*-
-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
-
 
 "DuplicateAnalysis uses this as it's base.  This accounts for much confusion."
 
-from plone import api
-from AccessControl import getSecurityManager
-from AccessControl import ClassSecurityInfo
+import cgi
+import math
+from decimal import Decimal
+
 from DateTime import DateTime
-from bika.lims import logger
-from bika.lims.utils.analysis import format_numeric_result
-from bika.lims.workflow import getTransitionActor
+from AccessControl import ClassSecurityInfo
+
 from plone.indexer import indexer
-from Products.ATContentTypes.content import schemata
-from Products.ATExtensions.ateapi import DateTimeField, DateTimeWidget, RecordsField
+from plone import api as ploneapi
+
+from zope.interface import implements
+
+from Products.ATExtensions.ateapi import DateTimeField
+from Products.ATExtensions.ateapi import DateTimeWidget
+
 from Products.Archetypes import atapi
 from Products.Archetypes.config import REFERENCE_CATALOG
-from Products.Archetypes.public import *
+from Products.Archetypes.public import BaseContent
+from Products.Archetypes.public import BooleanField
+from Products.Archetypes.public import ComputedField
+from Products.Archetypes.public import ComputedWidget
+from Products.Archetypes.public import DecimalWidget
+from Products.Archetypes.public import FixedPointField
+from Products.Archetypes.public import IntegerField
+from Products.Archetypes.public import IntegerWidget
+from Products.Archetypes.public import ReferenceField
+from Products.Archetypes.public import ReferenceWidget
+from Products.Archetypes.public import Schema
+from Products.Archetypes.public import StringField
+from Products.Archetypes.public import TextField
 from Products.Archetypes.references import HoldingReference
+
 from Products.CMFCore.WorkflowCore import WorkflowException
-from Products.CMFCore.permissions import View, ModifyPortalContent
 from Products.CMFCore.utils import getToolByName
-from Products.CMFPlone.utils import safe_unicode, _createObjectByType
 from Products.CMFEditions.ArchivistTool import ArchivistRetrieveError
+from Products.CMFPlone.utils import _createObjectByType
+from Products.CMFPlone.utils import safe_unicode
+
 from bika.lims import bikaMessageFactory as _
-from bika.lims.utils import t
 from bika.lims import logger
 from bika.lims.browser.fields import DurationField
 from bika.lims.browser.fields import HistoryAwareReferenceField
 from bika.lims.browser.fields import InterimFieldsField
-from bika.lims.permissions import *
-from bika.lims.permissions import Verify as VerifyPermission
 from bika.lims.browser.widgets import DurationWidget
 from bika.lims.browser.widgets import RecordsWidget as BikaRecordsWidget
 from bika.lims.config import PROJECTNAME
 from bika.lims.content.bikaschema import BikaSchema
-from bika.lims.interfaces import IAnalysis, IDuplicateAnalysis, IReferenceAnalysis, \
-    IRoutineAnalysis, ISamplePrepWorkflow
+from bika.lims.interfaces import IAnalysis
+from bika.lims.interfaces import IDuplicateAnalysis
+from bika.lims.interfaces import IReferenceAnalysis
 from bika.lims.interfaces import IReferenceSample
-from bika.lims.utils import changeWorkflowState, formatDecimalMark
+from bika.lims.interfaces import ISamplePrepWorkflow
+from bika.lims.permissions import Unassign
+from bika.lims.permissions import Verify as VerifyPermission
+from bika.lims.utils import changeWorkflowState
 from bika.lims.utils import drop_trailing_zeros_decimal
+from bika.lims.utils import formatDecimalMark
+from bika.lims.utils.analysis import format_numeric_result
 from bika.lims.utils.analysis import get_significant_digits
+from bika.lims.workflow import getTransitionActor
 from bika.lims.workflow import skip
-from bika.lims.workflow import doActionFor
-from decimal import Decimal
-from zope.interface import implements
-import cgi
-import datetime
-import math
+
 
 @indexer(IAnalysis)
 def Priority(instance):
@@ -59,173 +76,251 @@ def Priority(instance):
     if priority:
         return priority.getSortKey()
 
+
 @indexer(IAnalysis)
 def sortable_title_with_sort_key(instance):
-    service = instance.getService()
-    if service:
-        sort_key = service.getSortKey()
-        if sort_key:
-            return "{:010.3f}{}".format(sort_key, service.Title())
-        return service.Title()
+    service_title = instance.getServiceTitle()
+    sort_key = instance.getSortKey()
+    return "{:010.3f}{}".format(sort_key, service_title)
+
 
 @indexer(IAnalysis)
 def getDepartmentUID(instance):
-    return instance.getService().getDepartment().UID()
+    return instance.getDepartmentUID()
+
 
 schema = BikaSchema.copy() + Schema((
-    HistoryAwareReferenceField('Service',
+
+    HistoryAwareReferenceField(
+        'Service',
         required=1,
         allowed_types=('AnalysisService',),
         relationship='AnalysisAnalysisService',
         referenceClass=HoldingReference,
         widget=ReferenceWidget(
-            label = _("Analysis Service"),
+            label=_("Analysis Service"),
         )
     ),
-    HistoryAwareReferenceField('Calculation',
+
+    HistoryAwareReferenceField(
+        'Calculation',
         allowed_types=('Calculation',),
         relationship='AnalysisCalculation',
         referenceClass=HoldingReference,
     ),
-    ReferenceField('Attachment',
+
+    ReferenceField(
+        'Attachment',
         multiValued=1,
         allowed_types=('Attachment',),
-        referenceClass = HoldingReference,
-        relationship = 'AnalysisAttachment',
+        referenceClass=HoldingReference,
+        relationship='AnalysisAttachment',
     ),
-    InterimFieldsField('InterimFields',
-        widget = BikaRecordsWidget(
-            label = _("Calculation Interim Fields"),
+
+    InterimFieldsField(
+        'InterimFields',
+        widget=BikaRecordsWidget(
+            label=_("Calculation Interim Fields"),
         )
     ),
-    StringField('Result',
+
+    StringField(
+        'Result',
     ),
-    DateTimeField('ResultCaptureDate',
-        widget = ComputedWidget(
+
+    DateTimeField(
+        'ResultCaptureDate',
+        widget=ComputedWidget(
             visible=False,
         ),
     ),
-    StringField('ResultDM',
+
+    StringField(
+        'ResultDM',
     ),
-    BooleanField('Retested',
-        default = False,
+
+    BooleanField(
+        'Retested',
+        default=False,
     ),
-    DurationField('MaxTimeAllowed',
-        widget = DurationWidget(
-            label = _("Maximum turn-around time"),
+
+    DurationField(
+        'MaxTimeAllowed',
+        widget=DurationWidget(
+            label=_("Maximum turn-around time"),
             description=_("Maximum time allowed for completion of the analysis. "
-                            "A late analysis alert is raised when this period elapses"),
+                          "A late analysis alert is raised when this period elapses"),
         ),
     ),
-    DateTimeField('DateAnalysisPublished',
-        widget = DateTimeWidget(
-            label = _("Date Published"),
+
+    DateTimeField(
+        'DateAnalysisPublished',
+        widget=DateTimeWidget(
+            label=_("Date Published"),
         ),
     ),
-    DateTimeField('DueDate',
-        widget = DateTimeWidget(
-            label = _("Due Date"),
+
+    DateTimeField(
+        'DueDate',
+        widget=DateTimeWidget(
+            label=_("Due Date"),
         ),
     ),
-    IntegerField('Duration',
-        widget = IntegerWidget(
-            label = _("Duration"),
+
+    IntegerField(
+        'Duration',
+        widget=IntegerWidget(
+            label=_("Duration"),
         )
     ),
-    IntegerField('Earliness',
-        widget = IntegerWidget(
-            label = _("Earliness"),
+
+    IntegerField(
+        'Earliness',
+        widget=IntegerWidget(
+            label=_("Earliness"),
         )
     ),
-    BooleanField('ReportDryMatter',
-        default = False,
+
+    BooleanField(
+        'ReportDryMatter',
+        default=False,
     ),
-    StringField('Analyst',
+
+    StringField(
+        'Analyst',
     ),
-    TextField('Remarks',
+
+    TextField(
+        'Remarks',
     ),
-    ReferenceField('Instrument',
-        required = 0,
-        allowed_types = ('Instrument',),
-        relationship = 'AnalysisInstrument',
-        referenceClass = HoldingReference,
+
+    ReferenceField(
+        'Instrument',
+        required=0,
+        allowed_types=('Instrument',),
+        relationship='AnalysisInstrument',
+        referenceClass=HoldingReference,
     ),
-    ReferenceField('Method',
-        required = 0,
-        allowed_types = ('Method',),
-        relationship = 'AnalysisMethod',
-        referenceClass = HoldingReference,
+
+    ReferenceField(
+        'Method',
+        required=0,
+        allowed_types=('Method',),
+        relationship='AnalysisMethod',
+        referenceClass=HoldingReference,
     ),
-    ReferenceField('SamplePartition',
-        required = 0,
-        allowed_types = ('SamplePartition',),
-        relationship = 'AnalysisSamplePartition',
-        referenceClass = HoldingReference,
+
+    ReferenceField(
+        'SamplePartition',
+        required=0,
+        allowed_types=('SamplePartition',),
+        relationship='AnalysisSamplePartition',
+        referenceClass=HoldingReference,
     ),
-    ComputedField('ClientUID',
-        expression = 'context.aq_parent.aq_parent.UID()',
+
+    ComputedField(
+        'ClientUID',
+        expression='context.aq_parent.aq_parent.UID()',
     ),
-    ComputedField('ClientTitle',
-        expression = 'context.aq_parent.aq_parent.Title()',
+
+    ComputedField(
+        'ClientTitle',
+        expression='context.aq_parent.aq_parent.Title()',
     ),
-    ComputedField('RequestID',
-        expression = 'context.aq_parent.getRequestID()',
+
+    ComputedField(
+        'RequestID',
+        expression='context.aq_parent.getRequestID()',
     ),
-    ComputedField('ClientOrderNumber',
-        expression = 'context.aq_parent.getClientOrderNumber()',
+
+    ComputedField(
+        'ClientOrderNumber',
+        expression='context.aq_parent.getClientOrderNumber()',
     ),
-    ComputedField('Keyword',
-        expression = 'context.getService().getKeyword()',
+
+    ComputedField(
+        'Keyword',
+        expression='context.getService().getKeyword()',
     ),
-    ComputedField('ServiceTitle',
-        expression = 'context.getService().Title()',
+
+    ComputedField(
+        'ServiceTitle',
+        expression='context.getService().Title()',
     ),
-    ComputedField('ServiceUID',
-        expression = 'context.getService().UID()',
+
+    ComputedField(
+        'ServiceUID',
+        expression='context.getService().UID()',
     ),
-    ComputedField('SampleTypeUID',
-        expression = 'context.aq_parent.getSample().getSampleType().UID()',
+
+    ComputedField(
+        'SampleTypeUID',
+        expression='context.aq_parent.getSample().getSampleType().UID()',
     ),
-    ComputedField('SamplePointUID',
-        expression = 'context.aq_parent.getSample().getSamplePoint().UID() if context.aq_parent.getSample().getSamplePoint() else None',
+
+    ComputedField(
+        'SamplePointUID',
+        expression='context.aq_parent.getSample().getSamplePoint().UID() if context.aq_parent.getSample().getSamplePoint() else None',
     ),
-    ComputedField('CategoryUID',
-        expression = 'context.getService().getCategoryUID()',
+
+    ComputedField(
+        'CategoryUID',
+        expression='context.getService().getCategoryUID()',
     ),
-    ComputedField('CategoryTitle',
-        expression = 'context.getService().getCategoryTitle()',
+
+    ComputedField(
+        'CategoryTitle',
+        expression='context.getService().getCategoryTitle()',
     ),
-    ComputedField('PointOfCapture',
-        expression = 'context.getService().getPointOfCapture()',
+
+    ComputedField(
+        'PointOfCapture',
+        expression='context.getService().getPointOfCapture()',
     ),
-    ComputedField('DateReceived',
-        expression = 'context.aq_parent.getDateReceived()',
+
+    ComputedField(
+        'DateReceived',
+        expression='context.aq_parent.getDateReceived()',
     ),
-    ComputedField('DateSampled',
-        expression = 'context.aq_parent.getSample().getDateSampled()',
+
+    ComputedField(
+        'DateSampled',
+        expression='context.aq_parent.getSample().getDateSampled()',
     ),
-    ComputedField('InstrumentValid',
-        expression = 'context.isInstrumentValid()'
+
+    ComputedField(
+        'InstrumentValid',
+        expression='context.isInstrumentValid()'
     ),
-    FixedPointField('Uncertainty',
+
+    FixedPointField(
+        'Uncertainty',
         precision=10,
         widget=DecimalWidget(
-            label = _("Uncertainty"),
+            label=_("Uncertainty"),
         ),
     ),
-    StringField('DetectionLimitOperand',),
+
+    StringField(
+        'DetectionLimitOperand',
+    ),
 
     # Required number of required verifications before this analysis being
     # transitioned to a 'verified' state. This value is set automatically
     # when the analysis is created, based on the value set for the property
     # NumberOfRequiredVerifications from the Analysis Service
-    IntegerField('NumberOfRequiredVerifications', default=1),
+    IntegerField(
+        'NumberOfRequiredVerifications',
+        default=1,
+    ),
 
     # This field keeps the user_ids of members who verified this analysis.
     # After each verification, user_id will be added end of this string
     # seperated by comma- ',' .
-    StringField('Verificators',default='')
-),
+    StringField(
+        'Verificators',
+        default='',
+    )),
 )
 
 
@@ -235,30 +330,86 @@ class Analysis(BaseContent):
     displayContentsTab = False
     schema = schema
 
+    # Custom Analysis Getters
+    #
+    # N.B.: These copy the original values from the Analysis Service on first access.
+    #
+    # The values from a created analysis should never change and always be the
+    # same as the original attributes from the service in the according version.
+    #
+    # XXX: Set on get -> not good and shouldn't be done
+    #
+    #      I'm doing this here to fix the expensive calls to `getService` on
+    #      multiple places. The architecture on Analysis -> AnalysisService is
+    #      completely reworked in SENAITE (https://github.com/senaite/bika.lims)
+    #      which should supersede this code in near future.
+    def getSortKey(self):
+        if getattr(self, "_SortKey", None) is None:
+            service = self.getService()
+            self._SortKey = service.getSortKey() or 0
+        return self._SortKey
+
+    def getDepartmentUID(self):
+        if getattr(self, "_DepartmentUID", None) is None:
+            service = self.getService()
+            self._DepartmentUID = service.getDepartment().UID()
+        return self._DepartmentUID
+
+    def getKeyword(self):
+        if getattr(self, "_Keyword", None) is None:
+            self._Keyword = self.Schema().getField("Keyword").get(self)
+        return self._Keyword
+
+    def getServiceTitle(self):
+        if getattr(self, "_ServiceTitle", None) is None:
+            self._ServiceTitle = self.Schema().getField("ServiceTitle").get(self)
+        return self._ServiceTitle
+
+    def getServiceUID(self):
+        if getattr(self, "_ServiceUID", None) is None:
+            self._ServiceUID = self.Schema().getField("ServiceUID").get(self)
+        return self._ServiceUID
+
+    def getCategoryUID(self):
+        if getattr(self, "_CategoryUID", None) is None:
+            self._CategoryUID = self.Schema().getField("CategoryUID").get(self)
+        return self._CategoryUID
+
+    def getCategoryTitle(self):
+        if getattr(self, "_CategoryTitle", None) is None:
+            self._CategoryTitle = self.Schema().getField("CategoryTitle").get(self)
+        return self._CategoryTitle
+
+    def getPointOfCapture(self):
+        if getattr(self, "_PointOfCapture", None) is None:
+            self._PointOfCapture = self.Schema().getField("PointOfCapture").get(self)
+        return self._PointOfCapture
+    # /Custom Analysis Getter
+
     def _getCatalogTool(self):
         from bika.lims.catalog import getCatalog
         return getCatalog(self)
 
     def getNumberOfVerifications(self):
-        verificators=self.getVerificators()
+        verificators = self.getVerificators()
         if not verificators:
             return 0
         return len(verificators.split(','))
 
-    def addVerificator(self,username):
-        verificators=self.getVerificators()
+    def addVerificator(self, username):
+        verificators = self.getVerificators()
         if not verificators:
             self.setVerificators(username)
         else:
-            self.setVerificators(verificators+","+username)
+            self.setVerificators(verificators + "," + username)
 
     def deleteLastVerificator(self):
-        verificators=self.getVerificators().split(',')
+        verificators = self.getVerificators().split(',')
         del verificators[-1]
         self.setVerificators(",".join(verificators))
 
-    def wasVerifiedByUser(self,username):
-        verificators=self.getVerificators().split(',')
+    def wasVerifiedByUser(self, username):
+        verificators = self.getVerificators().split(',')
         return username in verificators
 
     def getLastVerificator(self):
@@ -269,15 +420,18 @@ class Analysis(BaseContent):
         Some silliness here, for premature indexing, when the service
         is not yet configured.
         """
-        try:
-            s = self.getService()
-            if s:
-                s = s.Title()
-            if not s:
+        if not getattr(self, "_Title", None):
+            s = ""
+            try:
+                s = self.getService()
+                if s:
+                    s = s.Title()
+                if not s:
+                    s = ''
+            except ArchivistRetrieveError:
                 s = ''
-        except ArchivistRetrieveError:
-            s = ''
-        return safe_unicode(s).encode('utf-8')
+            self._Title = safe_unicode(s).encode('utf-8')
+        return self._Title
 
     def updateDueDate(self):
         # set the max hours allowed
@@ -290,11 +444,9 @@ class Analysis(BaseContent):
         # set the due date
         # default to old calc in case no calendars
         max_days = float(maxtime.get('days', 0)) + \
-                 (
-                     (float(maxtime.get('hours', 0)) * 3600 +
-                      float(maxtime.get('minutes', 0)) * 60)
-                     / 86400
-                 )
+            ((float(maxtime.get('hours', 0)) * 3600 +
+              float(maxtime.get('minutes', 0)) * 60) / 86400)
+
         part = self.getSamplePartition()
         if part:
             starttime = part.getDateReceived()
@@ -325,11 +477,11 @@ class Analysis(BaseContent):
         """
         serv = self.getService()
         schu = self.Schema().getField('Uncertainty').get(self)
-        if result is None and (self.isAboveUpperDetectionLimit() or \
+        if result is None and (self.isAboveUpperDetectionLimit() or
                                self.isBelowLowerDetectionLimit()):
             return None
 
-        if schu and serv.getAllowManualUncertainty() == True:
+        if schu and serv.getAllowManualUncertainty() is True:
             try:
                 schu = float(schu)
                 return schu
@@ -444,14 +596,14 @@ class Analysis(BaseContent):
             a Lower Detection Limit. Otherwise, returns False
         """
         return self.isBelowLowerDetectionLimit() and \
-                self.getDetectionLimitOperand() == '<'
+            self.getDetectionLimitOperand() == '<'
 
     def isUpperDetectionLimit(self):
         """ Returns True if the result for this analysis represents
             an Upper Detection Limit. Otherwise, returns False
         """
         return self.isAboveUpperDetectionLimit() and \
-                self.getDetectionLimitOperand() == '>'
+            self.getDetectionLimitOperand() == '>'
 
     def getDependents(self):
         """ Return a list of analyses who depend on us
@@ -515,7 +667,7 @@ class Analysis(BaseContent):
                     # is not an indeterminate.
                     try:
                         val = val.replace(oper, '', 1)
-                        val = str(float(val)) # An indeterminate?
+                        val = str(float(val))  # An indeterminate?
                         if oper == '<':
                             val = srv.getLowerDetectionLimit()
                         else:
@@ -573,6 +725,9 @@ class Analysis(BaseContent):
             return self.getAnalysis().aq_parent.getSample()
         return self.aq_parent.getSample()
 
+    def getClientTitle(self):
+        return self.aq_parent.aq_parent.Title()
+
     def getResultsRange(self, specification=None):
         """ Returns the valid results range for this analysis, a
             dictionary with the following keys: 'keyword', 'uid', 'min',
@@ -587,11 +742,11 @@ class Analysis(BaseContent):
         while an and an.portal_type in ('DuplicateAnalysis', 'RejectAnalysis'):
             an = an.getAnalysis()
 
+        keyword = self.getKeyword()
         if specification == 'ar' or specification is None:
             if an.aq_parent and an.aq_parent.portal_type == 'AnalysisRequest':
-                key = an.getKeyword()
                 rr = an.aq_parent.getResultsRange()
-                rr = [r for r in rr if r.get('keyword', '') == an.getKeyword()]
+                rr = [r for r in rr if r.get('keyword', '') == keyword]
                 rr = rr[0] if rr and len(rr) > 0 else {}
                 if rr:
                     rr['uid'] = self.UID()
@@ -630,15 +785,14 @@ class Analysis(BaseContent):
 
             if len(proxies) == 0:
                 # No client specs available, retrieve lab specs
-                labspecsuid = self.bika_setup.bika_analysisspecs.UID()
-                proxies = bsc(portal_type = 'AnalysisSpec',
-                          getSampleTypeUID = sampletype_uid)
+                proxies = bsc(portal_type='AnalysisSpec',
+                              getSampleTypeUID=sampletype_uid)
         else:
             specuid = specification == "client" and self.getClientUID() or \
-                    self.bika_setup.bika_analysisspecs.UID()
+                self.bika_setup.bika_analysisspecs.UID()
             proxies = bsc(portal_type='AnalysisSpec',
-                              getSampleTypeUID=sampletype_uid,
-                              getClientUID=specuid)
+                          getSampleTypeUID=sampletype_uid,
+                          getClientUID=specuid)
 
         outspecs = None
         for spec in (p.getObject() for p in proxies):
@@ -652,12 +806,12 @@ class Analysis(BaseContent):
         """ Calculates the result for the current analysis if it depends of
             other analysis/interim fields. Otherwise, do nothing
         """
-        if self.getResult() and override == False:
+        if self.getResult() and override is False:
             return False
 
         serv = self.getService()
         calc = self.getCalculation() if self.getCalculation() \
-                                     else serv.getCalculation()
+            else serv.getCalculation()
         if not calc:
             return False
 
@@ -666,8 +820,7 @@ class Analysis(BaseContent):
         # Interims' priority order (from low to high):
         # Calculation < Analysis Service < Analysis
         interims = calc.getInterimFields() + \
-                   serv.getInterimFields() + \
-                   self.getInterimFields()
+            serv.getInterimFields() + self.getInterimFields()
 
         # Add interims to mapping
         for i in interims:
@@ -700,12 +853,12 @@ class Analysis(BaseContent):
                     udl = dependency.getUpperDetectionLimit()
                     bdl = dependency.isBelowLowerDetectionLimit()
                     adl = dependency.isAboveUpperDetectionLimit()
-                    mapping[key]=result
-                    mapping['%s.%s' % (key, 'RESULT')]=result
-                    mapping['%s.%s' % (key, 'LDL')]=ldl
-                    mapping['%s.%s' % (key, 'UDL')]=udl
-                    mapping['%s.%s' % (key, 'BELOWLDL')]=int(bdl)
-                    mapping['%s.%s' % (key, 'ABOVEUDL')]=int(adl)
+                    mapping[key] = result
+                    mapping['%s.%s' % (key, 'RESULT')] = result
+                    mapping['%s.%s' % (key, 'LDL')] = ldl
+                    mapping['%s.%s' % (key, 'UDL')] = udl
+                    mapping['%s.%s' % (key, 'BELOWLDL')] = int(bdl)
+                    mapping['%s.%s' % (key, 'ABOVEUDL')] = int(adl)
                 except:
                     return False
 
@@ -714,18 +867,21 @@ class Analysis(BaseContent):
         formula = formula.replace('[', '%(').replace(']', ')f')
         try:
             formula = eval("'%s'%%mapping" % formula,
-                               {"__builtins__": None,
-                                'math': math,
-                                'context': self},
-                               {'mapping': mapping})
-            result = eval(formula)
+                           {"__builtins__": None,
+                            'math': math,
+                            'context': self},
+                           {'mapping': mapping})
+            result = eval(formula, calc._getGlobals())
         except TypeError:
             self.setResult("NA")
             return True
         except ZeroDivisionError:
             self.setResult('0/0')
             return True
-        except KeyError as e:
+        except KeyError:
+            self.setResult("NA")
+            return True
+        except ImportError:
             self.setResult("NA")
             return True
 
@@ -757,8 +913,7 @@ class Analysis(BaseContent):
         priority = self.getPriority()
         if priority and priority.getPricePremium() > 0:
             price = Decimal(price) + (
-                      Decimal(price) * Decimal(priority.getPricePremium())
-                      / 100)
+                Decimal(price) * Decimal(priority.getPricePremium()) / 100)
         return price
 
     def getVATAmount(self):
@@ -785,7 +940,7 @@ class Analysis(BaseContent):
             no instrument assigned or is valid.
         """
         return self.getInstrument().isValid() \
-                if self.getInstrument() else True
+            if self.getInstrument() else True
 
     def getDefaultInstrument(self):
         """ Returns the default instrument for this analysis according
@@ -837,14 +992,14 @@ class Analysis(BaseContent):
         service = self.getService()
         uids = []
 
-        if service.getInstrumentEntryOfResults() == True:
+        if service.getInstrumentEntryOfResults() is True:
             uids = [ins.getRawMethod() for ins in service.getInstruments()]
 
         else:
             # Get only the methods set manually
             uids = service.getRawMethods()
 
-        if onlyuids == False:
+        if onlyuids is False:
             uc = getToolByName(self, 'uid_catalog')
             meths = [item.getObject() for item in uc(UID=uids)]
             return meths
@@ -858,16 +1013,16 @@ class Analysis(BaseContent):
         uids = []
         service = self.getService()
 
-        if service.getInstrumentEntryOfResults() == True:
+        if service.getInstrumentEntryOfResults() is True:
             uids = service.getRawInstruments()
 
-        elif service.getManualEntryOfResults() == True:
+        elif service.getManualEntryOfResults() is True:
             meths = self.getAllowedMethods(False)
             for meth in meths:
                 uids += meth.getInstrumentUIDs()
             set(uids)
 
-        if onlyuids == False:
+        if onlyuids is False:
             uc = getToolByName(self, 'uid_catalog')
             instrs = [item.getObject() for item in uc(UID=uids)]
             return instrs
@@ -914,7 +1069,7 @@ class Analysis(BaseContent):
         dl = self.getDetectionLimitOperand()
         if dl:
             try:
-                res = float(result) # required, check if floatable
+                res = float(result)  # required, check if floatable
                 res = drop_trailing_zeros_decimal(res)
                 fdm = formatDecimalMark(res, decimalmark)
                 hdl = cgi.escape(dl) if html else dl
@@ -988,8 +1143,8 @@ class Analysis(BaseContent):
 
         # Render numerical values
         return format_numeric_result(self, self.getResult(),
-                        decimalmark=decimalmark,
-                        sciformat=sciformat)
+                                     decimalmark=decimalmark,
+                                     sciformat=sciformat)
 
     def getPrecision(self, result=None):
         """
@@ -1005,8 +1160,8 @@ class Analysis(BaseContent):
         """
         serv = self.getService()
         schu = self.Schema().getField('Uncertainty').get(self)
-        if schu and serv.getAllowManualUncertainty() == True \
-            and serv.getPrecisionFromUncertainty() == True:
+        if schu and serv.getAllowManualUncertainty() is True \
+           and serv.getPrecisionFromUncertainty() is True:
             uncertainty = self.getUncertainty(result)
             if uncertainty == 0:
                 return 1
@@ -1036,7 +1191,7 @@ class Analysis(BaseContent):
         mtool = getToolByName(self, 'portal_membership')
         analyst = self.getAnalyst().strip()
         analyst_member = mtool.getMemberById(analyst)
-        if analyst_member != None:
+        if analyst_member is not None:
             return analyst_member.getProperty('fullname')
         else:
             return ''
@@ -1083,7 +1238,7 @@ class Analysis(BaseContent):
         """
         # Check if the user has "Bika: Verify" privileges
         username = member.getUserName()
-        allowed = api.user.has_permission(VerifyPermission, username=username)
+        allowed = ploneapi.user.has_permission(VerifyPermission, username=username)
         if not allowed:
             return False
 
@@ -1096,19 +1251,20 @@ class Analysis(BaseContent):
         if self_submitted and not selfverification:
             return False
 
-        #Checking verifiability depending on multi-verification type of bika_setup
-        if self.bika_setup.getNumberOfRequiredVerifications()>1:
-            mv_type=self.bika_setup.getTypeOfmultiVerification()
-            #If user verified before and self_multi_disabled, then return False
-            if mv_type=='self_multi_disabled' and self.wasVerifiedByUser(username):
+        # Checking verifiability depending on multi-verification type of bika_setup
+        if self.bika_setup.getNumberOfRequiredVerifications() > 1:
+            mv_type = self.bika_setup.getTypeOfmultiVerification()
+            # If user verified before and self_multi_disabled, then return False
+            if mv_type == 'self_multi_disabled' and self.wasVerifiedByUser(username):
                 return False
 
             # If user is the last verificator and consecutively multi-verification
             # is disabled, then return False
             # Comparing was added just to check if this method is called before/after
             # verification
-            elif mv_type=='self_multi_not_cons' and username==self.getLastVerificator() and \
-                self.getNumberOfVerifications()<self.getNumberOfRequiredVerifications():
+            elif mv_type == 'self_multi_not_cons' and \
+                    username == self.getLastVerificator() and \
+                    self.getNumberOfVerifications() < self.getNumberOfRequiredVerifications():
                 return False
 
         # All checks pass
@@ -1177,7 +1333,6 @@ class Analysis(BaseContent):
         :return: true or false
         """
         mtool = getToolByName(self, "portal_membership")
-        checkPermission = mtool.checkPermission
         # Check if the analysis is in a "verifiable" state
         if self.isVerifiable():
             # Check if the user can verify the analysis
@@ -1230,7 +1385,7 @@ class Analysis(BaseContent):
         ar = self.aq_parent
         self.reindexObject(idxs=["review_state", ])
         # Dependencies are submitted already, ignore them.
-        #-------------------------------------------------
+        # ------------------------------------------------
         # Submit our dependents
         # Need to check for result and status of dependencies first
         dependents = self.getDependents()
@@ -1251,8 +1406,7 @@ class Analysis(BaseContent):
                     dependencies = dependent.getDependencies()
                     for dependency in dependencies:
                         if workflow.getInfoFor(dependency, "review_state") in \
-                           ("to_be_sampled", "to_be_preserved",
-                            "sample_due", "sample_received",):
+                           ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received"):
                             can_submit = False
                 if can_submit:
                     workflow.doActionFor(dependent, "submit")
@@ -1263,8 +1417,7 @@ class Analysis(BaseContent):
             all_submitted = True
             for a in ar.getAnalyses():
                 if a.review_state in \
-                   ("to_be_sampled", "to_be_preserved",
-                    "sample_due", "sample_received",):
+                   ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received"):
                     all_submitted = False
                     break
             if all_submitted:
@@ -1280,8 +1433,7 @@ class Analysis(BaseContent):
                 all_submitted = True
                 for a in ws.getAnalyses():
                     if workflow.getInfoFor(a, "review_state") in \
-                       ("to_be_sampled", "to_be_preserved",
-                        "sample_due", "sample_received", "assigned",):
+                       ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "assigned"):
                         # Note: referenceanalyses and duplicateanalyses can still have review_state = "assigned".
                         all_submitted = False
                         break
@@ -1298,8 +1450,7 @@ class Analysis(BaseContent):
             dependencies = self.getDependencies()
             for dependency in dependencies:
                 if workflow.getInfoFor(dependency, "review_state") in \
-                   ("to_be_sampled", "to_be_preserved", "sample_due",
-                    "sample_received", "attachment_due",):
+                   ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "attachment_due"):
                     can_attach = False
         if can_attach:
             try:
@@ -1360,7 +1511,7 @@ class Analysis(BaseContent):
             ws.addAnalysis(analysis)
         analysis.reindexObject()
         # retract our dependencies
-        if not "retract all dependencies" in self.REQUEST["workflow_skiplist"]:
+        if "retract all dependencies" not in self.REQUEST["workflow_skiplist"]:
             for dependency in self.getDependencies():
                 if not skip(dependency, "retract", peek=True):
                     if workflow.getInfoFor(dependency, "review_state") in ("attachment_due", "to_be_verified",):
@@ -1379,7 +1530,7 @@ class Analysis(BaseContent):
             if workflow.getInfoFor(ar, "review_state") == "sample_received":
                 skip(ar, "retract")
             else:
-                if not "retract all analyses" in self.REQUEST["workflow_skiplist"]:
+                if "retract all analyses" not in self.REQUEST["workflow_skiplist"]:
                     self.REQUEST["workflow_skiplist"].append("retract all analyses")
                 workflow.doActionFor(ar, "retract")
         # Escalate action to the Worksheet (if it's on one).
@@ -1390,7 +1541,7 @@ class Analysis(BaseContent):
                 if workflow.getInfoFor(ws, "review_state") == "open":
                     skip(ws, "retract")
                 else:
-                    if not "retract all analyses" in self.REQUEST['workflow_skiplist']:
+                    if "retract all analyses" not in self.REQUEST['workflow_skiplist']:
                         self.REQUEST["workflow_skiplist"].append("retract all analyses")
                     try:
                         workflow.doActionFor(ws, "retract")
@@ -1428,12 +1579,11 @@ class Analysis(BaseContent):
             all_verified = True
             for a in ar.getAnalyses():
                 if a.review_state in \
-                   ("to_be_sampled", "to_be_preserved", "sample_due",
-                    "sample_received", "attachment_due", "to_be_verified"):
+                   ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "attachment_due", "to_be_verified"):
                     all_verified = False
                     break
             if all_verified:
-                if not "verify all analyses" in self.REQUEST['workflow_skiplist']:
+                if "verify all analyses" not in self.REQUEST['workflow_skiplist']:
                     self.REQUEST["workflow_skiplist"].append("verify all analyses")
                 workflow.doActionFor(ar, "verify")
         # If this is on a worksheet and all it's other analyses are verified,
@@ -1446,15 +1596,13 @@ class Analysis(BaseContent):
                 all_verified = True
                 for a in ws.getAnalyses():
                     if workflow.getInfoFor(a, "review_state") in \
-                       ("to_be_sampled", "to_be_preserved", "sample_due",
-                        "sample_received", "attachment_due", "to_be_verified",
-                        "assigned"):
+                       ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "attachment_due", "to_be_verified", "assigned"):
                         # Note: referenceanalyses and duplicateanalyses can
                         # still have review_state = "assigned".
                         all_verified = False
                         break
                 if all_verified:
-                    if not "verify all analyses" in self.REQUEST['workflow_skiplist']:
+                    if "verify all analyses" not in self.REQUEST['workflow_skiplist']:
                         self.REQUEST["workflow_skiplist"].append("verify all analyses")
                     workflow.doActionFor(ws, "verify")
 
@@ -1530,8 +1678,7 @@ class Analysis(BaseContent):
             can_attach = True
             for a in ar.getAnalyses():
                 if a.review_state in \
-                   ("to_be_sampled", "to_be_preserved",
-                    "sample_due", "sample_received", "attachment_due",):
+                   ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "attachment_due"):
                     can_attach = False
                     break
             if can_attach:
@@ -1546,8 +1693,7 @@ class Analysis(BaseContent):
                 can_attach = True
                 for a in ws.getAnalyses():
                     if workflow.getInfoFor(a, "review_state") in \
-                       ("to_be_sampled", "to_be_preserved", "sample_due",
-                        "sample_received", "attachment_due", "assigned",):
+                       ("to_be_sampled", "to_be_preserved", "sample_due", "sample_received", "attachment_due", "assigned"):
                         # Note: referenceanalyses and duplicateanalyses can still have review_state = "assigned".
                         can_attach = False
                         break
@@ -1619,23 +1765,20 @@ class Analysis(BaseContent):
             ws_empty = False
             a_state = workflow.getInfoFor(a, "review_state")
             if a_state in \
-               ("to_be_sampled", "to_be_preserved", "assigned",
-                "sample_due", "sample_received",):
+               ("to_be_sampled", "to_be_preserved", "assigned", "sample_due", "sample_received"):
                 can_submit = False
             else:
                 if not ws.getAnalyst():
                     can_submit = False
             if a_state in \
-               ("to_be_sampled", "to_be_preserved", "assigned",
-                "sample_due", "sample_received", "attachment_due",):
+               ("to_be_sampled", "to_be_preserved", "assigned", "sample_due", "sample_received", "attachment_due"):
                 can_attach = False
             if a_state in \
-               ("to_be_sampled", "to_be_preserved", "assigned", "sample_due",
-                "sample_received", "attachment_due", "to_be_verified",):
+               ("to_be_sampled", "to_be_preserved", "assigned", "sample_due", "sample_received", "attachment_due", "to_be_verified",):
                 can_verify = False
         if not ws_empty:
-        # Note: WS adds itself to the skiplist so we have to take it off again
-        #       to allow multiple promotions (maybe by more than one instance).
+            # Note: WS adds itself to the skiplist so we have to take it off again
+            #       to allow multiple promotions (maybe by more than one instance).
             if can_submit and workflow.getInfoFor(ws, "review_state") == "open":
                 workflow.doActionFor(ws, "submit")
                 skip(ws, 'unassign', unskip=True)

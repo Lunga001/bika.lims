@@ -18,9 +18,9 @@ DOCTESTS = [
     'bika.lims.browser.analysisrequest.add',
     'bika.lims.browser.bika_listing',
     'bika.lims.browser.instrument',
-    'bika.lims.jsonapi.create',
-    'bika.lims.jsonapi.update',
-    'bika.lims.jsonapi.remove',
+    'bika.lims.jsonapi.v1.create',
+    'bika.lims.jsonapi.v1.update',
+    'bika.lims.jsonapi.v1.remove',
     'bika.lims.vocabularies',
 ]
 

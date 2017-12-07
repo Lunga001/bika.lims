@@ -1,8 +1,8 @@
-# coding=utf-8
-
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from AccessControl import getSecurityManager
@@ -39,7 +39,8 @@ class AddAnalysesView(BikaListingView):
         self.contentFilter = {'portal_type': 'Analysis',
                               'review_state':'sample_received',
                               'worksheetanalysis_review_state':'unassigned',
-                              'cancellation_state':'active'}
+                              'cancellation_state':'active',
+                              'sort_on': 'getDueDate'}
         self.base_url = self.context.absolute_url()
         self.view_url = self.base_url + "/add_analyses"
         self.show_sort_column = False
@@ -128,6 +129,8 @@ class AddAnalysesView(BikaListingView):
         self._process_request()
 
         if self.request.get('table_only', '') == self.form_id:
+            return self.contents_table()
+        elif self.request.get('rows_only', '') == self.form_id:
             return self.contents_table()
         else:
             return self.template()

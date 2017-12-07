@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
+#
 # This file is part of Bika LIMS
 #
-# Copyright 2011-2016 by it's authors.
+# Copyright 2011-2017 by it's authors.
 # Some rights reserved. See LICENSE.txt, AUTHORS.txt.
 
 from AccessControl import ClassSecurityInfo
@@ -44,6 +46,7 @@ class ServicesView(BikaListingView):
 
         self.show_categories = False
         self.categories = []
+        # TODO Check if filtering by multiple UIDs should be enabled
         self.do_cats = self.context.bika_setup.getCategoriseAnalysisServices()
         if self.do_cats:
             self.show_categories = True
